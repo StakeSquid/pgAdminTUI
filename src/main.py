@@ -787,17 +787,21 @@ class DatabaseTab(TabPane):
             await app.execute_query_with_params(query, filter_params, is_manual=True, preserve_sort=True)
     
     async def execute_sorted_manual_query(self) -> None:
-        """Execute a manual query with sorting applied."""
+        """Execute a manual query with sorting applied (and filters if any)."""
         if not self.manual_query:
-            logger.warning("No manual query to sort")
+            logger.warning("No manual query to execute")
             return
         
-        # If we have filters, use the filtered query execution
+        # If we have filters, use the filtered query execution (which also handles sorting)
         if self.manual_filter_state and self.manual_filter_state.has_filters():
             await self.execute_filtered_manual_query()
             return
         
-        logger.info(f"Sorting manual query by {self.manual_sort_column} {self.manual_sort_direction}")
+        # No filters, just apply sorting if any
+        if self.manual_sort_column:
+            logger.info(f"Sorting manual query by {self.manual_sort_column} {self.manual_sort_direction}")
+        else:
+            logger.info("Executing manual query without sorting or filtering")
         
         # Parse the query to add ORDER BY
         query = self.manual_query.strip()
@@ -1586,7 +1590,15 @@ class PgAdminTUI(App):
         if not isinstance(active_pane, DatabaseTab):
             return
         
-        if active_pane.filter_state and active_pane.filter_state.has_filters():
+        # Check for manual query filters
+        if active_pane.manual_query and active_pane.manual_filter_state and active_pane.manual_filter_state.has_filters():
+            count = active_pane.manual_filter_state.get_filter_count()
+            active_pane.manual_filter_state.clear_all()
+            # Re-execute the manual query without filters
+            await active_pane.execute_sorted_manual_query()
+            self.notify(f"Cleared {count} filters from manual query", severity="success")
+        # Check for table query filters
+        elif active_pane.filter_state and active_pane.filter_state.has_filters():
             count = active_pane.filter_state.get_filter_count()
             active_pane.filter_state.clear_all()
             await active_pane.execute_sorted_query()
