@@ -9,6 +9,7 @@ from datetime import datetime
 import yaml
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.WARNING)  # Only log warnings and errors
 
 
 class QuerySeverity(Enum):

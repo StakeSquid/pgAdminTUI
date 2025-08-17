@@ -11,6 +11,7 @@ A powerful Terminal User Interface (TUI) application for exploring and managing 
 ## Features
 
 - 🚀 **No SQL Required**: Navigate databases using an intuitive UI
+- 🗂️ **Comprehensive Explorer**: Browse tables, views, indexes, functions, sequences, materialized views, and custom types
 - 🔐 **Safety First**: Built-in query filtering with whitelist/blacklist
 - 🌐 **Multi-Database**: Seamlessly switch between multiple databases
 - 💪 **Resilient**: Graceful handling of connection failures
@@ -18,6 +19,7 @@ A powerful Terminal User Interface (TUI) application for exploring and managing 
 - 📋 **psql Emulation**: Supports common psql meta-commands (\dt, \dn, etc.)
 - 📊 **Data Export**: Export query results to CSV, JSON, Excel, and more
 - 🎨 **Themeable**: Dark and light themes with customizable colors
+- 📝 **Clean Logging**: Logs written to file, not cluttering your terminal
 
 ## Installation
 

@@ -22,12 +22,29 @@ from textual.message import Message
 from src.core.connection_manager import ConnectionManager, DatabaseConfig
 from src.core.query_executor import QueryExecutor, SecurityGuard
 
-# Configure logging
+# Configure logging to file only (not to console)
+import tempfile
+from pathlib import Path
+
+# Create log directory if it doesn't exist
+log_dir = Path.home() / '.pgadmintui'
+log_dir.mkdir(exist_ok=True)
+log_file = log_dir / 'app.log'
+
+# Configure logging to file only
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(log_file, mode='a'),
+        # Remove StreamHandler to prevent console output
+    ]
 )
 logger = logging.getLogger(__name__)
+
+# Silence other noisy loggers
+logging.getLogger('asyncio').setLevel(logging.WARNING)
+logging.getLogger('textual').setLevel(logging.WARNING)
 
 
 class TableSelected(Message):
@@ -563,6 +580,9 @@ class PgAdminTUI(App):
         """Initialize the application when mounted."""
         logger.info("Application mounted, initializing...")
         
+        # Show where logs are being written
+        self.notify(f"Logs: {log_file}", severity="information", timeout=3)
+        
         # Load database from environment
         db_url = os.environ.get('DATABASE_URL')
         if not db_url:
@@ -707,10 +727,33 @@ Keyboard Shortcuts:
 
 
 @click.command()
-def main():
+@click.option('--debug', is_flag=True, help='Enable debug logging to console')
+def main(debug):
     """pgAdminTUI - Terminal UI for PostgreSQL database exploration."""
-    app = PgAdminTUI()
-    app.run()
+    
+    # If debug mode, add console handler
+    if debug:
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(logging.DEBUG)
+        logging.getLogger().addHandler(console_handler)
+        logging.getLogger().setLevel(logging.DEBUG)
+    else:
+        # Ensure no console output in normal mode
+        import sys
+        import os
+        
+        # Suppress stderr temporarily during startup
+        old_stderr = sys.stderr
+        sys.stderr = open(os.devnull, 'w')
+    
+    try:
+        app = PgAdminTUI()
+        app.run()
+    finally:
+        if not debug:
+            # Restore stderr
+            sys.stderr.close()
+            sys.stderr = old_stderr
 
 
 if __name__ == "__main__":

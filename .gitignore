@@ -48,6 +48,7 @@ databases-demo.yaml
 # Logs
 *.log
 logs/
+.pgadmintui/
 
 # Testing
 .coverage

@@ -15,6 +15,7 @@ except ImportError:
     from psycopg.pool import AsyncConnectionPool
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.WARNING)  # Only log warnings and errors
 
 
 class ConnectionStatus(Enum):
