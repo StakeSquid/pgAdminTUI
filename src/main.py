@@ -79,9 +79,12 @@ class DatabaseTab(TabPane):
         self.filters_panel = None  # Active filters panel
         self.column_types = {}  # Cache column types
         self.filter_dialog = None  # Filter dialog widget
-        self.manual_query = None  # Store manual query for re-execution with sorting
+        self.manual_query = None  # Store manual query for re-execution with sorting/filtering
         self.manual_sort_column = None  # Sort column for manual queries
         self.manual_sort_direction = "ASC"  # Sort direction for manual queries
+        self.manual_filter_state = None  # Filter state for manual queries
+        self.manual_column_types = {}  # Column types for manual query results
+        self.manual_column_aliases = {}  # Map aliases to real column names for manual queries
     
         
     def compose(self) -> ComposeResult:
@@ -486,6 +489,8 @@ class DatabaseTab(TabPane):
             self.manual_query = None
             self.manual_sort_column = None
             self.manual_sort_direction = "ASC"
+            self.manual_filter_state = None
+            self.manual_column_aliases = {}
             
             # Initialize filter state for this table
             table_key = f"{schema}.{name}"
@@ -509,6 +514,8 @@ class DatabaseTab(TabPane):
             self.manual_query = None
             self.manual_sort_column = None
             self.manual_sort_direction = "ASC"
+            self.manual_filter_state = None
+            self.manual_column_aliases = {}
             
             # Initialize filter state for this view
             table_key = f"{schema}.{name}"
@@ -551,6 +558,8 @@ class DatabaseTab(TabPane):
             self.manual_query = None
             self.manual_sort_column = None
             self.manual_sort_direction = "ASC"
+            self.manual_filter_state = None
+            self.manual_column_aliases = {}
             
             # Initialize filter state for this materialized view
             table_key = f"{schema}.{name}"
@@ -628,10 +637,164 @@ class DatabaseTab(TabPane):
             # Re-execute query with ORDER BY
             await self.execute_sorted_query()
     
+    def parse_column_aliases(self, query: str) -> dict:
+        """Parse a SQL query to extract column aliases mapping."""
+        import re
+        aliases = {}
+        
+        # Pattern to match column AS alias in SELECT clause
+        # Matches patterns like: column AS "Alias" or column AS Alias
+        select_pattern = r'SELECT\s+(.*?)\s+FROM'
+        select_match = re.search(select_pattern, query, re.IGNORECASE | re.DOTALL)
+        
+        if select_match:
+            select_clause = select_match.group(1)
+            # Remove comments
+            select_clause = re.sub(r'--.*?(\n|$)', '', select_clause)
+            
+            # Split by commas (but not commas inside parentheses)
+            columns = []
+            paren_depth = 0
+            current_col = ""
+            for char in select_clause:
+                if char == '(':
+                    paren_depth += 1
+                elif char == ')':
+                    paren_depth -= 1
+                elif char == ',' and paren_depth == 0:
+                    columns.append(current_col.strip())
+                    current_col = ""
+                    continue
+                current_col += char
+            if current_col.strip():
+                columns.append(current_col.strip())
+            
+            # Parse each column for AS aliases
+            for col in columns:
+                # Pattern: column_name AS "Alias" or column_name AS Alias
+                alias_pattern = r'(\w+(?:\.\w+)?)\s+AS\s+["\']?(\w+)["\']?'
+                alias_match = re.search(alias_pattern, col, re.IGNORECASE)
+                if alias_match:
+                    real_name = alias_match.group(1).split('.')[-1]  # Get column name without table prefix
+                    alias_name = alias_match.group(2)
+                    aliases[alias_name] = real_name
+                    logger.info(f"Found alias mapping: {alias_name} -> {real_name}")
+        
+        return aliases
+    
+    async def execute_filtered_manual_query(self) -> None:
+        """Execute a manual query with filters and sorting applied."""
+        if not self.manual_query:
+            logger.warning("No manual query to filter")
+            return
+        
+        logger.info(f"Filtering manual query with {self.manual_filter_state.get_filter_count() if self.manual_filter_state else 0} filters")
+        
+        # Start with the base query
+        query = self.manual_query.strip()
+        query_upper = query.upper()
+        
+        # Apply filters if any
+        filter_params = []
+        if self.manual_filter_state and self.manual_filter_state.has_filters():
+            # Get the WHERE clause with alias mappings
+            # We need to replace alias names with real column names in the WHERE clause
+            where_clause, params = self.manual_filter_state.to_sql_where()
+            
+            # Replace aliases with real column names in WHERE clause
+            if where_clause and self.manual_column_aliases:
+                for alias, real_name in self.manual_column_aliases.items():
+                    # Replace "Alias" with "real_name" in WHERE clause
+                    where_clause = where_clause.replace(f'"{alias}"', f'"{real_name}"')
+                    logger.info(f"Replaced alias {alias} with {real_name} in WHERE clause")
+            
+            if where_clause:
+                filter_params = params
+                
+                # Find where to insert WHERE clause
+                # Need to handle cases with existing WHERE, GROUP BY, ORDER BY, LIMIT
+                where_pos = query_upper.find('WHERE')
+                group_pos = query_upper.find('GROUP BY')
+                order_pos = query_upper.find('ORDER BY')
+                limit_pos = query_upper.find('LIMIT')
+                
+                # Find the insertion point (after FROM but before GROUP BY/ORDER BY/LIMIT)
+                if where_pos > 0:
+                    # Query already has WHERE - add as AND
+                    # Find end of WHERE clause
+                    end_pos = len(query)
+                    for pos in [group_pos, order_pos, limit_pos]:
+                        if pos > where_pos and pos < end_pos:
+                            end_pos = pos
+                    
+                    # Insert before GROUP BY/ORDER BY/LIMIT
+                    query = query[:end_pos].rstrip() + f" AND ({where_clause}) " + query[end_pos:]
+                else:
+                    # No WHERE clause - add one
+                    # Find where to insert (before GROUP BY/ORDER BY/LIMIT)
+                    insert_pos = len(query)
+                    for pos in [group_pos, order_pos, limit_pos]:
+                        if pos > 0 and pos < insert_pos:
+                            insert_pos = pos
+                    
+                    # Handle semicolon at end
+                    if insert_pos == len(query) and query.rstrip().endswith(';'):
+                        query = query.rstrip()[:-1] + f" WHERE {where_clause};"
+                    else:
+                        query = query[:insert_pos].rstrip() + f" WHERE {where_clause} " + query[insert_pos:]
+                
+                # Update query_upper after modification
+                query_upper = query.upper()
+        
+        # Apply sorting if any
+        if self.manual_sort_column:
+            # Check if sort column is an alias and get real name
+            sort_column = self.manual_sort_column
+            if sort_column in self.manual_column_aliases:
+                sort_column = self.manual_column_aliases[sort_column]
+                logger.info(f"Using real column name {sort_column} instead of alias {self.manual_sort_column} for sorting")
+            
+            # Remove existing ORDER BY if present
+            order_by_pos = query_upper.rfind('ORDER BY')
+            if order_by_pos > 0:
+                # Find where ORDER BY clause ends (before LIMIT or end of query)
+                limit_pos = query_upper.find('LIMIT', order_by_pos)
+                if limit_pos > 0:
+                    query = query[:order_by_pos].rstrip() + ' ' + query[limit_pos:]
+                else:
+                    query = query[:order_by_pos].rstrip()
+                # Update query_upper after modification
+                query_upper = query.upper()
+            
+            # Add new ORDER BY before LIMIT if present, otherwise at the end
+            limit_pos = query_upper.rfind('LIMIT')
+            order_clause = f'ORDER BY "{sort_column}" {self.manual_sort_direction}'
+            if limit_pos > 0:
+                query = query[:limit_pos].rstrip() + f' {order_clause} ' + query[limit_pos:]
+            else:
+                # Remove trailing semicolon if present
+                if query.rstrip().endswith(';'):
+                    query = query.rstrip()[:-1] + f' {order_clause};'
+                else:
+                    query = query + f' {order_clause}'
+        
+        logger.info(f"Modified query: {query[:200]}")
+        logger.info(f"Filter params: {filter_params}")
+        
+        # Execute the filtered/sorted query
+        app = self.app
+        if app:
+            await app.execute_query_with_params(query, filter_params, is_manual=True, preserve_sort=True)
+    
     async def execute_sorted_manual_query(self) -> None:
         """Execute a manual query with sorting applied."""
         if not self.manual_query:
             logger.warning("No manual query to sort")
+            return
+        
+        # If we have filters, use the filtered query execution
+        if self.manual_filter_state and self.manual_filter_state.has_filters():
+            await self.execute_filtered_manual_query()
             return
         
         logger.info(f"Sorting manual query by {self.manual_sort_column} {self.manual_sort_direction}")
@@ -639,6 +802,12 @@ class DatabaseTab(TabPane):
         # Parse the query to add ORDER BY
         query = self.manual_query.strip()
         query_upper = query.upper()
+        
+        # Check if sort column is an alias and get real name
+        sort_column = self.manual_sort_column
+        if sort_column in self.manual_column_aliases:
+            sort_column = self.manual_column_aliases[sort_column]
+            logger.info(f"Using real column name {sort_column} instead of alias {self.manual_sort_column} for sorting")
         
         # Remove existing ORDER BY if present
         order_by_pos = query_upper.rfind('ORDER BY')
@@ -655,7 +824,7 @@ class DatabaseTab(TabPane):
         # Add new ORDER BY before LIMIT if present, otherwise at the end
         limit_pos = query_upper.rfind('LIMIT')
         if self.manual_sort_column:
-            order_clause = f'ORDER BY "{self.manual_sort_column}" {self.manual_sort_direction}'
+            order_clause = f'ORDER BY "{sort_column}" {self.manual_sort_direction}'
             if limit_pos > 0:
                 query = query[:limit_pos].rstrip() + f' {order_clause} ' + query[limit_pos:]
             else:
@@ -984,13 +1153,19 @@ class PgAdminTUI(App):
         
         await self.execute_query(query, is_manual=False)
     
-    async def execute_query(self, query: str = None, is_manual: bool = False, preserve_sort: bool = False) -> None:
+    async def execute_query_with_params(self, query: str, params: list = None, is_manual: bool = False, preserve_sort: bool = False) -> None:
+        """Execute a query with parameters (for filtered manual queries)."""
+        # This is a wrapper that passes params through to the main execute_query
+        await self.execute_query(query, is_manual=is_manual, preserve_sort=preserve_sort, filter_params=params)
+    
+    async def execute_query(self, query: str = None, is_manual: bool = False, preserve_sort: bool = False, filter_params: list = None) -> None:
         """Execute a SQL query.
         
         Args:
             query: The SQL query to execute (if None, get from query_input)
             is_manual: True if this is a manually typed query (from Ctrl+Enter)
             preserve_sort: True if we should preserve existing sort state (for re-execution with sorting)
+            filter_params: Parameters for filtered queries
         """
         # Get active tab
         active_pane = self.tabbed_content.active_pane if self.tabbed_content else None
@@ -1013,17 +1188,19 @@ class PgAdminTUI(App):
         self.notify("Executing query...")
         
         try:
-            # Check if we have stored filter params from on_table_selected
-            params = []
+            # Check if we have stored filter params from on_table_selected or passed directly
+            params = filter_params if filter_params else []
             
             # Log current state
             if active_pane:
                 logger.info(f"[STATE] Current table: {active_pane.current_table}")
                 logger.info(f"[STATE] Has filters: {active_pane.filter_state.has_filters() if active_pane.filter_state else False}")
                 logger.info(f"[STATE] Sort column: {active_pane.sort_column}, direction: {active_pane.sort_direction}")
+                if is_manual:
+                    logger.info(f"[STATE] Manual filters: {active_pane.manual_filter_state.get_filter_count() if active_pane.manual_filter_state else 0}")
             
-            # Only apply filters if this is NOT a manual query
-            if not is_manual:
+            # Only apply filters if this is NOT a manual query (manual queries pass params directly)
+            if not is_manual and not filter_params:
                 if hasattr(active_pane, '_filter_params'):
                     params = active_pane._filter_params
                     delattr(active_pane, '_filter_params')
@@ -1044,18 +1221,28 @@ class PgAdminTUI(App):
                 active_pane.sort_direction = "ASC"
                 active_pane.filter_state = None
                 
-                # Store the manual query for potential re-execution with sorting
-                # Only reset sort info if this is a new manual query (not a re-execution with sorting)
+                # Store the manual query for potential re-execution with sorting/filtering
+                # Only reset sort/filter info if this is a new manual query (not a re-execution)
                 if not preserve_sort:
-                    # Store the base query (without ORDER BY that might have been added)
+                    # Store the base query (without ORDER BY/WHERE that might have been added)
                     # We'll store the original query from query_input if available
                     if not active_pane.manual_query or active_pane.manual_query != query:
                         active_pane.manual_query = query
+                        # Parse column aliases from the query
+                        active_pane.manual_column_aliases = active_pane.parse_column_aliases(query)
+                        logger.info(f"[MANUAL] Parsed aliases: {active_pane.manual_column_aliases}")
                     active_pane.manual_sort_column = None
                     active_pane.manual_sort_direction = "ASC"
-                    logger.info("[MANUAL] Stored new manual query for potential sorting")
+                    # Initialize filter state for manual queries
+                    if not active_pane.manual_filter_state:
+                        from src.core.filter_manager import FilterState
+                        active_pane.manual_filter_state = FilterState()
+                    active_pane.manual_filter_state.clear_all()
+                    logger.info("[MANUAL] Stored new manual query for potential sorting/filtering")
                 else:
                     logger.info(f"[MANUAL] Re-executing manual query with sort: {active_pane.manual_sort_column} {active_pane.manual_sort_direction}")
+                    if active_pane.manual_filter_state:
+                        logger.info(f"[MANUAL] Active filters: {active_pane.manual_filter_state.get_filter_count()}")
             
             # Execute query - convert params list to tuple if needed
             if params and isinstance(params, list):
@@ -1090,10 +1277,17 @@ class PgAdminTUI(App):
                                     if active_filters:
                                         header = f"{header} [F]"  # Use [F] as filter indicator
                         elif active_pane.manual_query:
-                            # Manual query - show sort indicator only
+                            # Manual query - show sort and filter indicators
                             if active_pane.manual_sort_column == col:
                                 indicator = " ▼" if active_pane.manual_sort_direction == "DESC" else " ▲"
                                 header = f"{col}{indicator}"
+                            
+                            # Add filter indicator if filtered
+                            if active_pane.manual_filter_state:
+                                if col in active_pane.manual_filter_state.filters:
+                                    active_filters = [f for f in active_pane.manual_filter_state.filters[col] if f.enabled]
+                                    if active_filters:
+                                        header = f"{header} [F]"  # Use [F] as filter indicator
                         
                         # Add hint about filtering
                         header = f"{header}"  # Column name with indicators
@@ -1120,6 +1314,24 @@ class PgAdminTUI(App):
                     # Check if this is a manual query
                     if not active_pane.current_table:
                         msg_parts.append("(manual query)")
+                        
+                        # Add filter info for manual queries
+                        if active_pane.manual_filter_state and active_pane.manual_filter_state.has_filters():
+                            filter_count = active_pane.manual_filter_state.get_filter_count()
+                            filtered_cols = list(active_pane.manual_filter_state.filters.keys())
+                            
+                            if filter_count == 1:
+                                # Show the single filter
+                                col = filtered_cols[0]
+                                filter = active_pane.manual_filter_state.filters[col][0]
+                                msg_parts.append(f"filtered by {col} {filter.operator.value}")
+                            else:
+                                # Show count and columns
+                                cols_str = ", ".join(filtered_cols[:3])  # Show first 3 columns
+                                if len(filtered_cols) > 3:
+                                    cols_str += f", +{len(filtered_cols) - 3} more"
+                                msg_parts.append(f"{filter_count} filters on: {cols_str}")
+                        
                         # Add sort info for manual queries
                         if active_pane.manual_sort_column:
                             direction = "descending" if active_pane.manual_sort_direction == "DESC" else "ascending"
@@ -1230,12 +1442,13 @@ class PgAdminTUI(App):
         if not isinstance(active_pane, DatabaseTab):
             return
         
-        if not active_pane.current_table:
-            self.notify("Cannot filter manual query results. Select a table from the explorer to enable filtering.", severity="warning")
-            return
-            
         if not active_pane.data_table:
             self.notify("No data to filter", severity="warning")
+            return
+        
+        # Check if we have a query to filter (either table or manual)
+        if not active_pane.current_table and not active_pane.manual_query:
+            self.notify("No query to filter", severity="warning")
             return
         
         # Get current cursor column
@@ -1246,27 +1459,42 @@ class PgAdminTUI(App):
                 self.notify("Could not determine column name", severity="warning")
                 return
             
-            # Initialize filter state if needed
-            if not active_pane.filter_state:
-                table_key = f"{active_pane.current_table['schema']}.{active_pane.current_table['name']}"
-                active_pane.filter_state = active_pane.filter_manager.get_state(table_key)
-            
-            # Detect column types if not cached
-            if column_name not in active_pane.column_types:
-                types = await active_pane.filter_manager.detect_column_types(
-                    self.connection_manager,
-                    active_pane.current_table['schema'],
-                    active_pane.current_table['name']
-                )
-                active_pane.column_types = types
-            
-            # Get data type
-            data_type = active_pane.column_types.get(column_name, DataType.OTHER)
+            # Handle filter for manual query or table query
+            if active_pane.manual_query:
+                # Manual query filtering
+                if not active_pane.manual_filter_state:
+                    from src.core.filter_manager import FilterState
+                    active_pane.manual_filter_state = FilterState()
+                
+                # For manual queries, we don't have column type info, so default to TEXT
+                from src.core.filter_manager import DataType
+                data_type = DataType.TEXT  # Default to text for manual queries
+                filter_state = active_pane.manual_filter_state
+            else:
+                # Table query filtering
+                # Initialize filter state if needed
+                if not active_pane.filter_state:
+                    table_key = f"{active_pane.current_table['schema']}.{active_pane.current_table['name']}"
+                    active_pane.filter_state = active_pane.filter_manager.get_state(table_key)
+                
+                # Detect column types if not cached
+                if column_name not in active_pane.column_types:
+                    types = await active_pane.filter_manager.detect_column_types(
+                        self.connection_manager,
+                        active_pane.current_table['schema'],
+                        active_pane.current_table['name']
+                    )
+                    active_pane.column_types = types
+                
+                # Get data type
+                from src.core.filter_manager import DataType
+                data_type = active_pane.column_types.get(column_name, DataType.OTHER)
+                filter_state = active_pane.filter_state
             
             # Get existing filter for this column if any
             existing_filter = None
-            if column_name in active_pane.filter_state.filters:
-                filters = active_pane.filter_state.filters[column_name]
+            if column_name in filter_state.filters:
+                filters = filter_state.filters[column_name]
                 if filters and len(filters) > 0:
                     existing_filter = filters[0]  # Get first filter for this column
                     logger.info(f"Found existing filter for {column_name}: {existing_filter.operator.value} {existing_filter.value}")
@@ -1276,18 +1504,25 @@ class PgAdminTUI(App):
                 try:
                     logger.info(f"Filter callback called for {col}, filter={filter}")
                     
+                    # Determine if this is for manual or table query
+                    is_manual = active_pane.manual_query is not None
+                    current_filter_state = active_pane.manual_filter_state if is_manual else active_pane.filter_state
+                    
                     # Check if we're clearing the filter (filter is None)
                     if filter is None:
                         # Remove all filters for this column
-                        if col in active_pane.filter_state.filters:
-                            del active_pane.filter_state.filters[col]
+                        if col in current_filter_state.filters:
+                            del current_filter_state.filters[col]
                             logger.info(f"Cleared filter for {col}")
                             
                             # Re-execute query
-                            await active_pane.execute_sorted_query()
+                            if is_manual:
+                                await active_pane.execute_filtered_manual_query()
+                            else:
+                                await active_pane.execute_sorted_query()
                             
                             # Show remaining filter count
-                            filter_count = active_pane.filter_state.get_filter_count()
+                            filter_count = current_filter_state.get_filter_count()
                             if filter_count > 0:
                                 self.notify(f"Filter cleared for {col} ({filter_count} filters remain)", severity="information")
                             else:
@@ -1296,25 +1531,29 @@ class PgAdminTUI(App):
                             self.notify(f"No filter to clear for {col}", severity="information")
                     else:
                         # Remove existing filters for this column (replace, not add)
-                        if col in active_pane.filter_state.filters:
-                            active_pane.filter_state.filters[col] = []
+                        if col in current_filter_state.filters:
+                            current_filter_state.filters[col] = []
                             logger.info(f"Cleared existing filters for {col}")
                         
                         # Add new filter
-                        active_pane.filter_state.add_filter(col, filter)
+                        current_filter_state.add_filter(col, filter)
                         logger.info(f"Filter added: {col} {filter.operator.value} {filter.value}")
-                        logger.info(f"Active filters: {active_pane.filter_state.get_filter_count()}")
-                        logger.info(f"All filtered columns: {list(active_pane.filter_state.filters.keys())}")
+                        logger.info(f"Active filters: {current_filter_state.get_filter_count()}")
+                        logger.info(f"All filtered columns: {list(current_filter_state.filters.keys())}")
                         
                         # Re-execute query
-                        await active_pane.execute_sorted_query()
+                        if is_manual:
+                            await active_pane.execute_filtered_manual_query()
+                        else:
+                            await active_pane.execute_sorted_query()
                         
                         # Show summary of all active filters
-                        filter_count = active_pane.filter_state.get_filter_count()
+                        filter_count = current_filter_state.get_filter_count()
+                        query_type = "manual query" if is_manual else "table"
                         if filter_count > 1:
-                            self.notify(f"Filter applied to {col} ({filter_count} filters active)", severity="success")
+                            self.notify(f"Filter applied to {col} ({filter_count} filters active on {query_type})", severity="success")
                         else:
-                            self.notify(f"Filter applied to {col}", severity="success")
+                            self.notify(f"Filter applied to {col} on {query_type}", severity="success")
                         
                 except Exception as e:
                     logger.error(f"Error in filter callback: {e}", exc_info=True)
