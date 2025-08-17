@@ -983,10 +983,27 @@ class PgAdminTUI(App):
                                 display_row.append(str(val)[:100])
                         active_pane.data_table.add_row(*display_row)
                     
-                    # Show appropriate message
+                    # Show appropriate message with filter details
                     msg_parts = [f"Query returned {len(results)} rows"]
+                    
+                    # Add filter summary
                     if active_pane.filter_state and active_pane.filter_state.has_filters():
-                        msg_parts.append(f"{active_pane.filter_state.get_filter_count()} filters active")
+                        filter_count = active_pane.filter_state.get_filter_count()
+                        filtered_cols = list(active_pane.filter_state.filters.keys())
+                        
+                        if filter_count == 1:
+                            # Show the single filter
+                            col = filtered_cols[0]
+                            filter = active_pane.filter_state.filters[col][0]
+                            msg_parts.append(f"filtered by {col} {filter.operator.value}")
+                        else:
+                            # Show count and columns
+                            cols_str = ", ".join(filtered_cols[:3])  # Show first 3 columns
+                            if len(filtered_cols) > 3:
+                                cols_str += f", +{len(filtered_cols) - 3} more"
+                            msg_parts.append(f"{filter_count} filters on: {cols_str}")
+                    
+                    # Add sort info
                     if active_pane.sort_column:
                         direction = "descending" if active_pane.sort_direction == "DESC" else "ascending"
                         msg_parts.append(f"sorted by {active_pane.sort_column} ({direction})")
@@ -1081,23 +1098,66 @@ class PgAdminTUI(App):
             # Get data type
             data_type = active_pane.column_types.get(column_name, DataType.OTHER)
             
-            # Define callback for when filter is applied
-            async def on_filter_applied(col, filter):
-                logger.info(f"Filter callback called for {col}")
-                # Remove existing filters for this column
-                if col in active_pane.filter_state.filters:
-                    active_pane.filter_state.filters[col] = []
-                # Add new filter
-                active_pane.filter_state.add_filter(col, filter)
-                logger.info(f"Filter added: {col} {filter.operator.value} {filter.value}")
-                logger.info(f"Active filters: {active_pane.filter_state.get_filter_count()}")
-                # Re-execute query
-                await active_pane.execute_sorted_query()
-                self.notify(f"Filter applied to {col}", severity="success")
+            # Get existing filter for this column if any
+            existing_filter = None
+            if column_name in active_pane.filter_state.filters:
+                filters = active_pane.filter_state.filters[column_name]
+                if filters and len(filters) > 0:
+                    existing_filter = filters[0]  # Get first filter for this column
+                    logger.info(f"Found existing filter for {column_name}: {existing_filter.operator.value} {existing_filter.value}")
             
-            # Show filter dialog
+            # Define callback for when filter is applied or cleared
+            async def on_filter_applied(col, filter):
+                try:
+                    logger.info(f"Filter callback called for {col}, filter={filter}")
+                    
+                    # Check if we're clearing the filter (filter is None)
+                    if filter is None:
+                        # Remove all filters for this column
+                        if col in active_pane.filter_state.filters:
+                            del active_pane.filter_state.filters[col]
+                            logger.info(f"Cleared filter for {col}")
+                            
+                            # Re-execute query
+                            await active_pane.execute_sorted_query()
+                            
+                            # Show remaining filter count
+                            filter_count = active_pane.filter_state.get_filter_count()
+                            if filter_count > 0:
+                                self.notify(f"Filter cleared for {col} ({filter_count} filters remain)", severity="information")
+                            else:
+                                self.notify(f"All filters cleared", severity="information")
+                        else:
+                            self.notify(f"No filter to clear for {col}", severity="information")
+                    else:
+                        # Remove existing filters for this column (replace, not add)
+                        if col in active_pane.filter_state.filters:
+                            active_pane.filter_state.filters[col] = []
+                            logger.info(f"Cleared existing filters for {col}")
+                        
+                        # Add new filter
+                        active_pane.filter_state.add_filter(col, filter)
+                        logger.info(f"Filter added: {col} {filter.operator.value} {filter.value}")
+                        logger.info(f"Active filters: {active_pane.filter_state.get_filter_count()}")
+                        logger.info(f"All filtered columns: {list(active_pane.filter_state.filters.keys())}")
+                        
+                        # Re-execute query
+                        await active_pane.execute_sorted_query()
+                        
+                        # Show summary of all active filters
+                        filter_count = active_pane.filter_state.get_filter_count()
+                        if filter_count > 1:
+                            self.notify(f"Filter applied to {col} ({filter_count} filters active)", severity="success")
+                        else:
+                            self.notify(f"Filter applied to {col}", severity="success")
+                        
+                except Exception as e:
+                    logger.error(f"Error in filter callback: {e}", exc_info=True)
+                    self.notify(f"Error applying filter: {e}", severity="error")
+            
+            # Show filter dialog with existing filter if any
             if active_pane.filter_dialog:
-                active_pane.filter_dialog.show(column_name, data_type, on_filter_applied)
+                active_pane.filter_dialog.show(column_name, data_type, on_filter_applied, existing_filter)
         else:
             self.notify("Please select a column to filter", severity="warning")
     

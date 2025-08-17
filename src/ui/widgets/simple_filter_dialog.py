@@ -109,6 +109,7 @@ class SimpleFilterDialog(Container):
             # Buttons
             with Horizontal(id="button-row"):
                 yield Button("Apply", variant="primary", id="apply")
+                yield Button("Clear", variant="warning", id="clear")
                 yield Button("Cancel", variant="default", id="cancel")
     
     def _get_operator_options(self) -> List[tuple]:
@@ -143,7 +144,7 @@ class SimpleFilterDialog(Container):
         }
         return labels.get(op, op.value)
     
-    def show(self, column: str, data_type: DataType, callback=None):
+    def show(self, column: str, data_type: DataType, callback=None, existing_filter=None):
         """Show the dialog for a column."""
         self.column = column
         self.data_type = data_type
@@ -151,11 +152,46 @@ class SimpleFilterDialog(Container):
         
         # Update title
         title = self.query_one("#filter-title", Static)
-        title.update(f"Filter: {column} ({data_type.value})")
+        if existing_filter:
+            title.update(f"Edit Filter: {column} ({data_type.value})")
+        else:
+            title.update(f"Filter: {column} ({data_type.value})")
         
         # Update operators
         if self.operator_select:
             self.operator_select.set_options(self._get_operator_options())
+            
+            # Set existing operator if we have a filter
+            if existing_filter:
+                self.operator_select.value = existing_filter.operator.value
+        
+        # Set existing values if we have a filter
+        if existing_filter:
+            if self.value_input:
+                # Handle different value types
+                if existing_filter.value is None:
+                    self.value_input.value = ""
+                elif isinstance(existing_filter.value, tuple) and len(existing_filter.value) == 2:
+                    # BETWEEN operator with two values
+                    self.value_input.value = str(existing_filter.value[0])
+                    if self.value_input2:
+                        self.value_input2.value = str(existing_filter.value[1])
+                        self.value_input2.display = True
+                else:
+                    self.value_input.value = str(existing_filter.value)
+            
+            # Set case sensitivity
+            if self.case_switch and hasattr(existing_filter, 'case_sensitive'):
+                self.case_switch.value = existing_filter.case_sensitive
+        else:
+            # Clear values for new filter
+            if self.value_input:
+                self.value_input.value = ""
+            if self.value_input2:
+                self.value_input2.value = ""
+                self.value_input2.display = False
+            if self.case_switch:
+                self.case_switch.value = False
         
         # Show case switch only for text
         if self.case_switch:
@@ -164,9 +200,12 @@ class SimpleFilterDialog(Container):
         # Show dialog
         self.add_class("visible")
         
-        # Focus on operator select
+        # Focus on operator select or value input
         if self.operator_select:
-            self.operator_select.focus()
+            if existing_filter and self.value_input:
+                self.value_input.focus()
+            else:
+                self.operator_select.focus()
     
     def hide(self):
         """Hide the dialog."""
@@ -176,6 +215,8 @@ class SimpleFilterDialog(Container):
         """Handle button press."""
         if event.button.id == "apply":
             self.apply_filter()
+        elif event.button.id == "clear":
+            self.clear_filter()
         elif event.button.id == "cancel":
             self.hide()
     
@@ -250,3 +291,26 @@ class SimpleFilterDialog(Container):
             logger = logging.getLogger(__name__)
             logger.error(f"Error applying filter: {e}")
             self.app.notify(f"Error applying filter: {e}", severity="error")
+    
+    def clear_filter(self):
+        """Clear the filter for this column."""
+        try:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info(f"Clearing filter for column: {self.column}")
+            
+            # Call callback with None to indicate filter should be cleared
+            if self.callback:
+                from asyncio import create_task
+                # Pass None as the filter to indicate clearing
+                create_task(self.callback(self.column, None))
+            
+            # Hide dialog
+            self.hide()
+            
+            self.app.notify(f"Filter cleared for {self.column}", severity="information")
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error clearing filter: {e}")
+            self.app.notify(f"Error clearing filter: {e}", severity="error")
