@@ -952,6 +952,7 @@ class PgAdminTUI(App):
     BINDINGS = [
         Binding("ctrl+q", "quit", "Quit"),
         Binding("f1", "help", "Help"),
+        Binding("f3", "export", "Export"),
         Binding("f4", "filter", "Filter"),
         Binding("f5", "refresh", "Refresh"),
         Binding("ctrl+f", "quick_filter", "Quick Filter"),
@@ -1606,12 +1607,304 @@ class PgAdminTUI(App):
         else:
             self.notify("No active filters to clear", severity="information")
     
+    async def action_export(self) -> None:
+        """Export current data to file."""
+        active_pane = self.tabbed_content.active_pane if self.tabbed_content else None
+        
+        if not isinstance(active_pane, DatabaseTab):
+            return
+        
+        if not active_pane.data_table:
+            self.notify("No data to export", severity="warning")
+            return
+        
+        # Check if we have any data
+        if active_pane.data_table.row_count == 0:
+            self.notify("No rows to export", severity="warning")
+            return
+        
+        # Prepare export dialog parameters
+        is_manual = active_pane.manual_query is not None
+        has_filters = False
+        has_sorting = False
+        table_name = "query_results"
+        existing_limit = None
+        
+        if is_manual:
+            # Manual query
+            has_filters = active_pane.manual_filter_state and active_pane.manual_filter_state.has_filters()
+            has_sorting = active_pane.manual_sort_column is not None
+            table_name = "manual_query"
+            
+            # Check for existing LIMIT in the query
+            import re
+            query = active_pane.manual_query.rstrip().rstrip(';')
+            limit_match = re.search(r'\s+LIMIT\s+(\d+)\s*$', query, re.IGNORECASE)
+            if limit_match:
+                existing_limit = int(limit_match.group(1))
+        elif active_pane.current_table:
+            # Table query
+            has_filters = active_pane.filter_state and active_pane.filter_state.has_filters()
+            has_sorting = active_pane.sort_column is not None
+            table_name = f"{active_pane.current_table['schema']}.{active_pane.current_table['name']}"
+        
+        # Get row counts
+        row_count = active_pane.data_table.row_count
+        filtered_count = row_count  # Current display count
+        
+        # If we have the original count stored somewhere, use it
+        # For now, we'll use the current count
+        
+        # Show export dialog
+        from src.ui.widgets.export_dialog import ExportDialog
+        
+        async def on_export_confirmed(filepath: str, options):
+            """Handle export after dialog confirmation."""
+            await self._perform_export(active_pane, filepath, options, is_manual)
+        
+        dialog = ExportDialog(
+            table_name=table_name,
+            has_filters=has_filters,
+            has_sorting=has_sorting,
+            row_count=row_count,
+            filtered_count=filtered_count,
+            is_manual_query=is_manual,
+            existing_limit=existing_limit,
+            callback=on_export_confirmed
+        )
+        
+        self.push_screen(dialog)
+    
+    async def _perform_export(self, active_pane, filepath: str, options, is_manual: bool):
+        """Perform the actual export operation."""
+        from src.core.export_manager import ExportManager, ExportFormat
+        from src.ui.widgets.progress_dialog import ProgressDialog
+        
+        progress_dialog = None
+        
+        try:
+            # Validate filepath
+            import os
+            from pathlib import Path
+            
+            # Expand user home and make absolute
+            filepath = str(Path(filepath).expanduser().absolute())
+            
+            # Check if directory exists
+            directory = os.path.dirname(filepath)
+            if directory and not os.path.exists(directory):
+                try:
+                    os.makedirs(directory, exist_ok=True)
+                except PermissionError:
+                    self.notify(f"Cannot create directory: {directory}", severity="error")
+                    return
+            
+            # Check if file exists and warn about overwrite
+            if os.path.exists(filepath):
+                # In a real app, we'd show a confirmation dialog here
+                logger.warning(f"File {filepath} will be overwritten")
+            
+            self.notify("Gathering data for export...", severity="information")
+            
+            # Determine which query to use
+            if options.use_filtered_data:
+                # Use current displayed data
+                data = await self._get_current_data(active_pane)
+            else:
+                # Get original data without filters/sorting
+                if is_manual:
+                    # Re-execute original manual query
+                    query = active_pane.manual_query
+                    
+                    # Handle LIMIT clause
+                    import re
+                    query = query.rstrip().rstrip(';')  # Remove trailing semicolon
+                    
+                    # Check if query already has a LIMIT clause
+                    limit_pattern = r'\s+LIMIT\s+(\d+)\s*$'
+                    limit_match = re.search(limit_pattern, query, re.IGNORECASE)
+                    
+                    if options.max_rows:
+                        # User specified a max_rows in export dialog - use it
+                        if limit_match:
+                            # Replace existing LIMIT with user's choice
+                            query = re.sub(limit_pattern, f' LIMIT {options.max_rows}', query, flags=re.IGNORECASE)
+                            logger.info(f"Replacing existing LIMIT with user's max_rows: {options.max_rows}")
+                        else:
+                            # Add LIMIT with user's choice
+                            query += f' LIMIT {options.max_rows}'
+                            logger.info(f"Adding user's max_rows as LIMIT: {options.max_rows}")
+                    elif not limit_match:
+                        # No user preference and no existing LIMIT - add safety default
+                        logger.info("Adding default LIMIT 100000 for export safety")
+                        query += " LIMIT 100000"
+                    # else: query has LIMIT and user didn't specify max_rows - keep existing LIMIT
+                    
+                    data = await self._execute_query_for_export(query)
+                else:
+                    # Get original table data
+                    schema = active_pane.current_table['schema']
+                    table = active_pane.current_table['name']
+                    query = f'SELECT * FROM "{schema}"."{table}"'
+                    if options.max_rows:
+                        query += f' LIMIT {options.max_rows}'
+                    else:
+                        # Add default limit for safety
+                        query += ' LIMIT 100000'
+                    data = await self._execute_query_for_export(query)
+            
+            if not data:
+                self.notify("No data to export", severity="warning")
+                return
+            
+            # Show progress dialog for large exports
+            show_progress = len(data) > 1000
+            if show_progress:
+                progress_dialog = ProgressDialog(title=f"Exporting {len(data)} rows...")
+                self.push_screen(progress_dialog)
+                await asyncio.sleep(0.1)  # Let the dialog render
+            
+            # Create export manager and perform export
+            export_manager = ExportManager()
+            
+            # Progress callback
+            async def progress_callback(progress, current, total):
+                if progress_dialog and not progress_dialog.cancelled:
+                    progress_dialog.update_progress(
+                        progress,
+                        f"Exporting row {current} of {total}",
+                        f"Writing to {os.path.basename(filepath)}"
+                    )
+                    # Check for cancellation
+                    if progress_dialog.cancelled:
+                        export_manager.cancel_export()
+                        return False
+                elif progress % 10 == 0:  # Update every 10% if no dialog
+                    self.notify(f"Export progress: {progress:.0f}% ({current}/{total} rows)")
+                
+                # Yield control periodically
+                if current % 100 == 0:
+                    await asyncio.sleep(0)
+                return True
+            
+            # Perform export based on format
+            success = False
+            if options.format == ExportFormat.CSV or options.format == ExportFormat.TSV:
+                success = await export_manager.export_to_csv(
+                    data, filepath, options, progress_callback
+                )
+            elif options.format == ExportFormat.JSON:
+                success = await export_manager.export_to_json(
+                    data, filepath, options, progress_callback
+                )
+            elif options.format == ExportFormat.SQL:
+                if is_manual:
+                    # For manual queries, use generic table name
+                    schema = "public"
+                    table = "exported_data"
+                else:
+                    schema = active_pane.current_table['schema']
+                    table = active_pane.current_table['name']
+                
+                success = await export_manager.export_to_sql(
+                    data, table, schema, filepath, options, progress_callback
+                )
+            else:
+                self.notify(f"Export format {options.format} not yet implemented", severity="error")
+                return
+            
+            # Close progress dialog
+            if progress_dialog:
+                progress_dialog.close_dialog()
+            
+            if success:
+                # Show file size
+                file_size = os.path.getsize(filepath)
+                size_str = self._format_file_size(file_size)
+                self.notify(f"✓ Exported {len(data)} rows to {filepath} ({size_str})", severity="success")
+            else:
+                if progress_dialog and progress_dialog.cancelled:
+                    self.notify("Export cancelled by user", severity="warning")
+                else:
+                    self.notify("Export failed", severity="error")
+                
+        except PermissionError as e:
+            self.notify(f"Permission denied: {e}", severity="error")
+        except IOError as e:
+            self.notify(f"IO Error: {e}", severity="error")
+        except MemoryError:
+            self.notify("Out of memory - try exporting fewer rows", severity="error")
+        except Exception as e:
+            logger.error(f"Export error: {e}", exc_info=True)
+            self.notify(f"Export failed: {str(e)}", severity="error")
+        finally:
+            # Make sure to close progress dialog
+            if progress_dialog:
+                try:
+                    progress_dialog.close_dialog()
+                except:
+                    pass
+    
+    def _format_file_size(self, size_bytes: int) -> str:
+        """Format file size in human-readable format."""
+        for unit in ['B', 'KB', 'MB', 'GB']:
+            if size_bytes < 1024.0:
+                return f"{size_bytes:.1f} {unit}"
+            size_bytes /= 1024.0
+        return f"{size_bytes:.1f} TB"
+    
+    async def _get_current_data(self, active_pane) -> list:
+        """Get the currently displayed data from the data table."""
+        # Get data from the data table widget
+        # This is the filtered/sorted data currently shown
+        data = []
+        
+        if not active_pane.data_table:
+            return data
+        
+        # Use the column_map to get actual column names
+        # The column_map maps column indices to real column names
+        columns = []
+        column_keys = list(active_pane.data_table.columns.keys())
+        
+        for col_key in column_keys:
+            # Get the real column name from the map
+            if col_key in active_pane.column_map:
+                col_name = active_pane.column_map[col_key]
+            else:
+                # Fallback: parse from label if not in map
+                col = active_pane.data_table.columns[col_key]
+                col_label = str(col.label)
+                # Remove indicators like ▲ ▼ [F]
+                col_label = col_label.replace(" ▲", "").replace(" ▼", "").replace(" [F]", "")
+                col_name = col_label
+            columns.append(col_name)
+        
+        # Get row data
+        for row_key in active_pane.data_table.rows:
+            row_data = {}
+            for i, col_key in enumerate(column_keys):
+                cell_value = active_pane.data_table.get_cell(row_key, col_key)
+                # Handle special values
+                if cell_value == "[NULL]":
+                    cell_value = None
+                row_data[columns[i]] = cell_value
+            data.append(row_data)
+        
+        return data
+    
+    async def _execute_query_for_export(self, query: str) -> list:
+        """Execute a query and return results for export."""
+        results = await self.connection_manager.execute_query(query)
+        return results if results else []
+    
     async def action_help(self) -> None:
         """Show help."""
         help_text = """
 Keyboard Shortcuts:
 - Ctrl+Q: Quit
 - Ctrl+Enter: Execute query
+- F3: Export data
 - F4: Filter current column
 - Ctrl+F: Quick filter (search)
 - Alt+F: Clear all filters
