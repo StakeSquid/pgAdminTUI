@@ -23,6 +23,8 @@ from textual.message import Message
 # Import our modules
 from src.core.connection_manager import ConnectionManager, DatabaseConfig, ConnectionStatus
 from src.core.query_executor import QueryExecutor, SecurityGuard
+from src.core.filter_manager import FilterManager, FilterState, ColumnFilter, FilterOperator, DataType
+from src.ui.widgets.simple_filter_dialog import SimpleFilterDialog
 
 # Configure logging to file only (not to console)
 import tempfile
@@ -72,32 +74,42 @@ class DatabaseTab(TabPane):
         self.sort_column = None  # Track which column is sorted
         self.sort_direction = "ASC"  # Track sort direction (ASC/DESC)
         self.column_map = {}  # Map ColumnKey objects to actual column names
+        self.filter_manager = FilterManager()  # Filter manager for this tab
+        self.filter_state = None  # Current filter state
+        self.filters_panel = None  # Active filters panel
+        self.column_types = {}  # Cache column types
+        self.filter_dialog = None  # Filter dialog widget
     
         
     def compose(self) -> ComposeResult:
         """Compose the database tab layout."""
-        with Horizontal():
-            # Left panel - Explorer
-            with Vertical(id="explorer-panel", classes="panel"):
-                yield Static("Database Explorer", classes="panel-title")
-                self.tree_widget = Tree("Loading...")
-                self.tree_widget.show_root = False
-                yield self.tree_widget
-            
-            # Right panel - Query and Results
-            with Vertical(id="main-panel", classes="panel"):
-                # Query input area
-                with Container(id="query-container"):
-                    yield Static("Query Input (Ctrl+Enter to execute):", classes="panel-title")
-                    self.query_input = TextArea(language="sql")
-                    self.query_input.text = "-- Enter SQL query here\nSELECT * FROM pg_tables LIMIT 10;"
-                    yield self.query_input
+        with Container():
+            with Horizontal():
+                # Left panel - Explorer
+                with Vertical(id="explorer-panel", classes="panel"):
+                    yield Static("Database Explorer", classes="panel-title")
+                    self.tree_widget = Tree("Loading...")
+                    self.tree_widget.show_root = False
+                    yield self.tree_widget
                 
-                # Results area
-                with Container(id="results-container"):
-                    yield Static("Results:", classes="panel-title")
-                    self.data_table = DataTable()
-                    yield self.data_table
+                # Right panel - Query and Results
+                with Vertical(id="main-panel", classes="panel"):
+                    # Query input area
+                    with Container(id="query-container"):
+                        yield Static("Query Input (Ctrl+Enter to execute):", classes="panel-title")
+                        self.query_input = TextArea(language="sql")
+                        self.query_input.text = "-- Enter SQL query here\nSELECT * FROM pg_tables LIMIT 10;"
+                        yield self.query_input
+                    
+                    # Results area
+                    with Container(id="results-container"):
+                        yield Static("Results:", classes="panel-title")
+                        self.data_table = DataTable()
+                        yield self.data_table
+            
+            # Filter dialog (hidden by default)
+            self.filter_dialog = SimpleFilterDialog()
+            yield self.filter_dialog
     
     async def on_mount(self) -> None:
         """When the tab is mounted, refresh the tree if we have a connection."""
@@ -467,6 +479,10 @@ class DatabaseTab(TabPane):
             self.sort_column = None
             self.sort_direction = "ASC"
             
+            # Initialize filter state for this table
+            table_key = f"{schema}.{name}"
+            self.filter_state = self.filter_manager.get_state(table_key)
+            
             # Update query input
             query = f"SELECT * FROM {schema}.{name} LIMIT 100;"
             if self.query_input:
@@ -480,6 +496,10 @@ class DatabaseTab(TabPane):
             self.current_table = {"schema": schema, "name": name, "type": "view"}
             self.sort_column = None
             self.sort_direction = "ASC"
+            
+            # Initialize filter state for this view
+            table_key = f"{schema}.{name}"
+            self.filter_state = self.filter_manager.get_state(table_key)
             
             # Update query input for view
             query = f"SELECT * FROM {schema}.{name} LIMIT 100;"
@@ -514,6 +534,10 @@ class DatabaseTab(TabPane):
             self.sort_column = None
             self.sort_direction = "ASC"
             
+            # Initialize filter state for this materialized view
+            table_key = f"{schema}.{name}"
+            self.filter_state = self.filter_manager.get_state(table_key)
+            
             # Query materialized view
             query = f"SELECT * FROM {schema}.{name} LIMIT 100;"
             if self.query_input:
@@ -541,7 +565,7 @@ class DatabaseTab(TabPane):
                 self.query_input.text = query.strip()
     
     async def on_data_table_header_selected(self, event) -> None:
-        """Handle column header clicks for sorting."""
+        """Handle column header clicks for sorting and filtering."""
         if not self.current_table or not self.data_table:
             return
         
@@ -558,6 +582,10 @@ class DatabaseTab(TabPane):
             logger.warning(f"Could not find column for key: {event.column_key}")
             return
         
+        # Check if shift is held for filter instead of sort
+        # For now, we'll just do sorting on click
+        # Filter is accessible via F4 key
+        
         # Toggle sort direction if same column, otherwise reset
         if self.sort_column == column_name:
             self.sort_direction = "DESC" if self.sort_direction == "ASC" else "ASC"
@@ -569,23 +597,40 @@ class DatabaseTab(TabPane):
         await self.execute_sorted_query()
     
     async def execute_sorted_query(self) -> None:
-        """Execute the current table query with sorting."""
+        """Execute the current table query with sorting and filtering."""
         if not self.current_table:
             return
         
         schema = self.current_table["schema"]
         name = self.current_table["name"]
         
-        # Build query with ORDER BY - properly quote column name
-        if self.sort_column:
-            # Quote the column name to handle special characters and reserved words
-            query = f'SELECT * FROM {schema}.{name} ORDER BY "{self.sort_column}" {self.sort_direction} LIMIT 100;'
-        else:
-            query = f"SELECT * FROM {schema}.{name} LIMIT 100;"
+        logger.info(f"execute_sorted_query called for {schema}.{name}")
         
-        # Update query input to show the sorted query
+        # Build base query
+        base_query = f"SELECT * FROM {schema}.{name}"
+        
+        # Apply filters if any
+        if self.filter_state and self.filter_state.has_filters():
+            where_clause, params = self.filter_state.to_sql_where()
+            logger.info(f"Filter WHERE clause: {where_clause}")
+            logger.info(f"Filter params: {params}")
+            if where_clause:
+                base_query += f" WHERE {where_clause}"
+        else:
+            logger.info("No filters active")
+        
+        # Add ORDER BY if sorting
+        if self.sort_column:
+            base_query += f' ORDER BY "{self.sort_column}" {self.sort_direction}'
+        
+        # Add LIMIT
+        base_query += " LIMIT 100"
+        
+        logger.info(f"Final query: {base_query}")
+        
+        # Update query input to show the complete query
         if self.query_input:
-            self.query_input.text = query
+            self.query_input.text = base_query
         
         # Execute via the main app
         self.post_message(TableSelected(schema, name))
@@ -650,7 +695,10 @@ class PgAdminTUI(App):
     BINDINGS = [
         Binding("ctrl+q", "quit", "Quit"),
         Binding("f1", "help", "Help"),
+        Binding("f4", "filter", "Filter"),
         Binding("f5", "refresh", "Refresh"),
+        Binding("ctrl+f", "quick_filter", "Quick Filter"),
+        Binding("alt+f", "clear_filters", "Clear Filters"),
         Binding("ctrl+enter", "execute_query", "Execute"),
         Binding("s", "sort_column", "Sort", show=False),
     ]
@@ -823,11 +871,29 @@ class PgAdminTUI(App):
         """Handle table selection."""
         logger.info(f"Table selected: {event.schema}.{event.table}")
         
-        # Get active tab to check for sorting
+        # Get active tab to check for sorting and filtering
         active_pane = self.tabbed_content.active_pane if self.tabbed_content else None
-        if isinstance(active_pane, DatabaseTab) and active_pane.sort_column:
-            # Use sorted query with properly quoted column name
-            query = f'SELECT * FROM {event.schema}.{event.table} ORDER BY "{active_pane.sort_column}" {active_pane.sort_direction} LIMIT 100'
+        
+        if isinstance(active_pane, DatabaseTab):
+            # Build query with filters and sorting
+            query = f"SELECT * FROM {event.schema}.{event.table}"
+            
+            # Add WHERE clause if filters are active
+            if active_pane.filter_state and active_pane.filter_state.has_filters():
+                where_clause, filter_params = active_pane.filter_state.to_sql_where()
+                if where_clause:
+                    query += f" WHERE {where_clause}"
+                    logger.info(f"Added WHERE clause to query: {where_clause}")
+                    logger.info(f"Filter params for query: {filter_params}")
+                    # Store params to pass to execute_query
+                    active_pane._filter_params = filter_params
+            
+            # Add ORDER BY if sorting
+            if active_pane.sort_column:
+                query += f' ORDER BY "{active_pane.sort_column}" {active_pane.sort_direction}'
+            
+            # Add LIMIT
+            query += " LIMIT 100"
         else:
             # Default query
             query = f"SELECT * FROM {event.schema}.{event.table} LIMIT 100"
@@ -853,8 +919,26 @@ class PgAdminTUI(App):
         self.notify("Executing query...")
         
         try:
-            # Execute query
-            results = await self.connection_manager.execute_query(query)
+            # Check if we have stored filter params from on_table_selected
+            params = []
+            if hasattr(active_pane, '_filter_params'):
+                params = active_pane._filter_params
+                delattr(active_pane, '_filter_params')
+                logger.info(f"Using stored filter params: {params}")
+            elif active_pane and active_pane.filter_state and active_pane.filter_state.has_filters():
+                # If query already has WHERE clause from on_table_selected, extract params
+                if "WHERE" in query.upper() and "SELECT * FROM pg_tables" not in query:
+                    _, params = active_pane.filter_state.to_sql_where()
+                    logger.info(f"Extracted {len(params)} filter parameters from state")
+                else:
+                    # Apply filters to query
+                    query, params = active_pane.filter_manager.apply_filters_to_query(query, active_pane.filter_state)
+                    logger.info(f"Applied {active_pane.filter_state.get_filter_count()} filters to query")
+            
+            # Execute query - convert params list to tuple if needed
+            if params and isinstance(params, list):
+                params = tuple(params)
+            results = await self.connection_manager.execute_query(query, params if params else None)
             
             # Clear and update data table
             if active_pane.data_table:
@@ -862,14 +946,27 @@ class PgAdminTUI(App):
                 active_pane.column_map.clear()  # Clear the column mapping
                 
                 if results:
-                    # Add columns with sortable headers
+                    # Add columns with sortable and filterable headers
                     columns = list(results[0].keys())
                     for i, col in enumerate(columns):
-                        # Add sort indicator to column header if this column is sorted
+                        # Build header with indicators
                         header = col
+                        
+                        # Add sort indicator if sorted
                         if active_pane.sort_column == col:
                             indicator = " ▼" if active_pane.sort_direction == "DESC" else " ▲"
                             header = f"{col}{indicator}"
+                        
+                        # Add filter indicator if filtered
+                        if active_pane.filter_state:
+                            if col in active_pane.filter_state.filters:
+                                active_filters = [f for f in active_pane.filter_state.filters[col] if f.enabled]
+                                if active_filters:
+                                    header = f"{header} [F]"  # Use [F] as filter indicator
+                        
+                        # Add hint about filtering
+                        header = f"{header}"  # Column name with indicators
+                        
                         # Add column - use index as key to avoid issues
                         active_pane.data_table.add_column(header, key=str(i))
                         # Store column name by index for easier lookup
@@ -887,11 +984,14 @@ class PgAdminTUI(App):
                         active_pane.data_table.add_row(*display_row)
                     
                     # Show appropriate message
+                    msg_parts = [f"Query returned {len(results)} rows"]
+                    if active_pane.filter_state and active_pane.filter_state.has_filters():
+                        msg_parts.append(f"{active_pane.filter_state.get_filter_count()} filters active")
                     if active_pane.sort_column:
                         direction = "descending" if active_pane.sort_direction == "DESC" else "ascending"
-                        self.notify(f"Query returned {len(results)} rows, sorted by {active_pane.sort_column} ({direction})", severity="success")
-                    else:
-                        self.notify(f"Query returned {len(results)} rows (click column headers to sort)", severity="success")
+                        msg_parts.append(f"sorted by {active_pane.sort_column} ({direction})")
+                    
+                    self.notify(" | ".join(msg_parts), severity="success")
                 else:
                     active_pane.data_table.add_column("Result")
                     active_pane.data_table.add_row("No results")
@@ -945,22 +1045,111 @@ class PgAdminTUI(App):
             # Re-execute query with sorting
             await active_pane.execute_sorted_query()
     
+    async def action_filter(self) -> None:
+        """Open filter dialog for current column."""
+        active_pane = self.tabbed_content.active_pane if self.tabbed_content else None
+        
+        if not isinstance(active_pane, DatabaseTab):
+            return
+        
+        if not active_pane.current_table or not active_pane.data_table:
+            self.notify("No table selected to filter", severity="warning")
+            return
+        
+        # Get current cursor column
+        if active_pane.data_table.cursor_column >= 0:
+            column_name = active_pane.column_map.get(str(active_pane.data_table.cursor_column))
+            
+            if not column_name:
+                self.notify("Could not determine column name", severity="warning")
+                return
+            
+            # Initialize filter state if needed
+            if not active_pane.filter_state:
+                table_key = f"{active_pane.current_table['schema']}.{active_pane.current_table['name']}"
+                active_pane.filter_state = active_pane.filter_manager.get_state(table_key)
+            
+            # Detect column types if not cached
+            if column_name not in active_pane.column_types:
+                types = await active_pane.filter_manager.detect_column_types(
+                    self.connection_manager,
+                    active_pane.current_table['schema'],
+                    active_pane.current_table['name']
+                )
+                active_pane.column_types = types
+            
+            # Get data type
+            data_type = active_pane.column_types.get(column_name, DataType.OTHER)
+            
+            # Define callback for when filter is applied
+            async def on_filter_applied(col, filter):
+                logger.info(f"Filter callback called for {col}")
+                # Remove existing filters for this column
+                if col in active_pane.filter_state.filters:
+                    active_pane.filter_state.filters[col] = []
+                # Add new filter
+                active_pane.filter_state.add_filter(col, filter)
+                logger.info(f"Filter added: {col} {filter.operator.value} {filter.value}")
+                logger.info(f"Active filters: {active_pane.filter_state.get_filter_count()}")
+                # Re-execute query
+                await active_pane.execute_sorted_query()
+                self.notify(f"Filter applied to {col}", severity="success")
+            
+            # Show filter dialog
+            if active_pane.filter_dialog:
+                active_pane.filter_dialog.show(column_name, data_type, on_filter_applied)
+        else:
+            self.notify("Please select a column to filter", severity="warning")
+    
+    async def action_quick_filter(self) -> None:
+        """Open quick filter for text search across all columns."""
+        active_pane = self.tabbed_content.active_pane if self.tabbed_content else None
+        
+        if not isinstance(active_pane, DatabaseTab):
+            return
+        
+        if not active_pane.current_table:
+            self.notify("No table selected to filter", severity="warning")
+            return
+        
+        # TODO: Implement quick filter dialog for text search
+        self.notify("Quick filter not yet implemented", severity="warning")
+    
+    async def action_clear_filters(self) -> None:
+        """Clear all active filters."""
+        active_pane = self.tabbed_content.active_pane if self.tabbed_content else None
+        
+        if not isinstance(active_pane, DatabaseTab):
+            return
+        
+        if active_pane.filter_state and active_pane.filter_state.has_filters():
+            count = active_pane.filter_state.get_filter_count()
+            active_pane.filter_state.clear_all()
+            await active_pane.execute_sorted_query()
+            self.notify(f"Cleared {count} filters", severity="success")
+        else:
+            self.notify("No active filters to clear", severity="information")
+    
     async def action_help(self) -> None:
         """Show help."""
         help_text = """
 Keyboard Shortcuts:
 - Ctrl+Q: Quit
 - Ctrl+Enter: Execute query
+- F4: Filter current column
+- Ctrl+F: Quick filter (search)
+- Alt+F: Clear all filters
 - F5: Refresh tree
 - S: Sort by current column
 - Enter: Select table/view
 - Arrow keys: Navigate
 
-Table Sorting:
+Table Features:
 - Click column headers to sort
 - Press 'S' on a column to sort
-- Click/press again to reverse
+- Press 'F4' on a column to filter
 - ▲ = ascending, ▼ = descending
+- [F] = filter active on column
 """
         self.notify(help_text, severity="information", timeout=10)
     
