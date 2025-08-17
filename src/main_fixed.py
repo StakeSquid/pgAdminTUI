@@ -154,6 +154,8 @@ class PgAdminTUI(App):
         Binding("f2", "query_mode", "Query"),
         Binding("f5", "refresh", "Refresh"),
         Binding("ctrl+enter", "execute_query", "Execute"),
+        Binding("d", "describe_table", "Describe", show=False),
+        Binding("enter", "select_node", "Select", show=False),
     ]
     
     def __init__(self, config_manager: ConfigManager, **kwargs):
@@ -276,7 +278,13 @@ Then restart the application."""
                 if tables:
                     tables_node = schema_node.add("📋 Tables", expand=(schema_name == 'public'))
                     for table_name, in tables:
-                        tables_node.add_leaf(f"📊 {table_name}")
+                        table_node = tables_node.add_leaf(f"📊 {table_name}")
+                        # Store metadata in the node for later use
+                        table_node.data = {
+                            "type": "table",
+                            "schema": schema_name,
+                            "name": table_name
+                        }
                 
                 # Load views
                 async with tab.conn.cursor() as cur:
@@ -292,7 +300,12 @@ Then restart the application."""
                 if views:
                     views_node = schema_node.add("👁 Views")
                     for view_name, in views:
-                        views_node.add_leaf(f"👁 {view_name}")
+                        view_node = views_node.add_leaf(f"👁 {view_name}")
+                        view_node.data = {
+                            "type": "view",
+                            "schema": schema_name,
+                            "name": view_name
+                        }
             
             self.notify(f"Loaded {len(schemas)} schemas", severity="success")
             
@@ -372,6 +385,44 @@ Then restart the application."""
         if isinstance(active_tab, DatabaseTab) and active_tab.query_input:
             active_tab.query_input.focus()
     
+    async def action_describe_table(self) -> None:
+        """Describe the selected table (like psql's \d command)."""
+        active_tab = self.tabbed_content.active
+        if not isinstance(active_tab, DatabaseTab) or not active_tab.conn:
+            return
+        
+        # Get the focused tree node
+        if not active_tab.tree_widget:
+            return
+        
+        # This is a simplified version - in reality we'd need to track the selected node
+        # For now, we'll use the query input to determine what to describe
+        query_text = active_tab.query_input.text if active_tab.query_input else ""
+        
+        # Try to extract table name from query
+        import re
+        match = re.search(r'FROM\s+(\w+\.)?(\w+)', query_text, re.IGNORECASE)
+        if match:
+            schema = match.group(1).rstrip('.') if match.group(1) else 'public'
+            table = match.group(2)
+            
+            # Execute describe query
+            describe_query = f"""
+                SELECT 
+                    column_name as "Column",
+                    data_type as "Type",
+                    is_nullable as "Nullable",
+                    column_default as "Default"
+                FROM information_schema.columns
+                WHERE table_schema = '{schema}'
+                AND table_name = '{table}'
+                ORDER BY ordinal_position;
+            """
+            
+            active_tab.query_input.text = describe_query
+            await self.action_execute_query()
+            self.notify(f"Describing {schema}.{table}", severity="information")
+    
     async def action_help(self) -> None:
         """Show help."""
         help_text = """
@@ -380,10 +431,99 @@ Keyboard Shortcuts:
 - F2: Focus query input
 - Ctrl+Enter: Execute query
 - F5: Refresh tree
+- Enter: Select table/view
+- D: Describe table structure
 - Tab: Switch panels
 - Arrow keys: Navigate
 """
         self.notify(help_text, severity="information", timeout=10)
+    
+    async def on_tree_node_selected(self, event) -> None:
+        """Handle tree node selection."""
+        node = event.node
+        
+        # Check if node has data
+        if not hasattr(node, 'data') or not node.data:
+            return
+        
+        # Get the active tab
+        active_tab = self.tabbed_content.active
+        if not isinstance(active_tab, DatabaseTab) or not active_tab.conn:
+            return
+        
+        node_type = node.data.get('type')
+        
+        if node_type == 'table':
+            # Load table data
+            schema = node.data.get('schema')
+            table = node.data.get('name')
+            
+            # Update query input with SELECT statement
+            query = f"SELECT * FROM {schema}.{table} LIMIT 100;"
+            if active_tab.query_input:
+                active_tab.query_input.text = query
+            
+            # Execute the query automatically
+            await self.execute_table_query(active_tab, schema, table)
+            
+        elif node_type == 'view':
+            # Load view data
+            schema = node.data.get('schema')
+            view = node.data.get('name')
+            
+            # Update query input
+            query = f"SELECT * FROM {schema}.{view} LIMIT 100;"
+            if active_tab.query_input:
+                active_tab.query_input.text = query
+            
+            # Execute the query
+            await self.execute_table_query(active_tab, schema, view)
+    
+    async def execute_table_query(self, tab: DatabaseTab, schema: str, table: str) -> None:
+        """Execute a query to show table contents."""
+        if not tab.conn:
+            return
+        
+        self.notify(f"Loading {schema}.{table}...")
+        
+        try:
+            query = f"SELECT * FROM {schema}.{table} LIMIT 100"
+            
+            async with tab.conn.cursor() as cur:
+                await cur.execute(query)
+                
+                # Clear and update results table
+                tab.data_table.clear(columns=True)
+                
+                if cur.description:
+                    # Add columns
+                    columns = [desc.name for desc in cur.description]
+                    for col in columns:
+                        tab.data_table.add_column(col)
+                    
+                    # Add rows
+                    rows = await cur.fetchall()
+                    for row in rows:
+                        display_row = []
+                        for val in row:
+                            if val is None:
+                                display_row.append("[dim]NULL[/dim]")
+                            elif isinstance(val, bool):
+                                display_row.append("✓" if val else "✗")
+                            elif isinstance(val, (dict, list)):
+                                display_row.append(str(val)[:50] + "..." if len(str(val)) > 50 else str(val))
+                            else:
+                                val_str = str(val)
+                                display_row.append(val_str[:100] + "..." if len(val_str) > 100 else val_str)
+                        tab.data_table.add_row(*display_row)
+                    
+                    self.notify(f"Loaded {len(rows)} rows from {schema}.{table}", severity="success")
+                    
+        except Exception as e:
+            self.notify(f"Error loading table: {e}", severity="error")
+            tab.data_table.clear(columns=True)
+            tab.data_table.add_column("Error")
+            tab.data_table.add_row(str(e))
     
     async def action_quit(self) -> None:
         """Quit the application."""
