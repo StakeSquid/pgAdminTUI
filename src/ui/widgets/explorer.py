@@ -33,12 +33,28 @@ class DatabaseExplorer(Widget):
     
     async def on_mount(self) -> None:
         """Initialize the explorer when mounted."""
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"Explorer mounted, connection_manager: {self.connection_manager}")
+        
         if self.connection_manager:
-            await self.refresh_tree()
+            # Check if any connection is active
+            conn = self.connection_manager.get_active_connection()
+            if conn and conn.status.value == "connected":
+                logger.info("Active connection found, refreshing tree")
+                await self.refresh_tree()
+            else:
+                logger.info("No active connection yet, tree will be refreshed later")
     
     async def refresh_tree(self) -> None:
         """Refresh the database tree."""
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        logger.debug(f"refresh_tree called, connection_manager={self.connection_manager}, tree={self._tree_widget}")
+        
         if not self.connection_manager or not self._tree_widget:
+            logger.warning(f"Cannot refresh tree: connection_manager={self.connection_manager}, tree={self._tree_widget}")
             return
         
         # Clear existing tree
@@ -46,6 +62,8 @@ class DatabaseExplorer(Widget):
         
         # Get active connection
         conn = self.connection_manager.get_active_connection()
+        logger.debug(f"Active connection: {conn}, status: {conn.status.value if conn else 'None'}")
+        
         if not conn or conn.status.value != "connected":
             root = self._tree_widget.root.add("No connection")
             return
@@ -56,12 +74,16 @@ class DatabaseExplorer(Widget):
             expand=True
         )
         db_node.data = {"type": "database", "name": conn.config.database}
+        logger.debug(f"Added database node: {conn.config.database}")
         
         # Load schemas
         await self._load_schemas(db_node)
     
     async def _load_schemas(self, parent_node: TreeNode) -> None:
         """Load schemas for the database."""
+        import logging
+        logger = logging.getLogger(__name__)
+        
         query = """
             SELECT nspname 
             FROM pg_catalog.pg_namespace 
@@ -70,8 +92,11 @@ class DatabaseExplorer(Widget):
             ORDER BY nspname
         """
         
+        logger.debug("Loading schemas...")
+        
         try:
             results = await self.connection_manager.execute_query(query)
+            logger.debug(f"Schema query returned {len(results) if results else 0} results")
             if results:
                 for row in results:
                     schema_name = row['nspname']
@@ -329,13 +354,19 @@ class DatabaseExplorer(Widget):
         
         # Emit custom event for main app to handle
         if node_type == "table":
-            from src.ui.events import TableSelected
+            try:
+                from ..events import TableSelected
+            except ImportError:
+                from src.ui.events import TableSelected
             self.post_message(TableSelected(
                 schema=node.data["schema"],
                 table=node.data["name"]
             ))
         elif node_type == "view":
-            from src.ui.events import ViewSelected
+            try:
+                from ..events import ViewSelected
+            except ImportError:
+                from src.ui.events import ViewSelected
             self.post_message(ViewSelected(
                 schema=node.data["schema"],
                 view=node.data["name"]

@@ -121,27 +121,9 @@ class DatabaseTab(TabPane):
                     )
                     schema_node.data = {"type": "schema", "name": schema_name}
                     
-                    # Add folders for different object types
+                    # Add Tables folder
                     tables_node = schema_node.add("📋 Tables")
                     tables_node.data = {"type": "tables_folder", "schema": schema_name}
-                    
-                    views_node = schema_node.add("👁 Views")
-                    views_node.data = {"type": "views_folder", "schema": schema_name}
-                    
-                    indexes_node = schema_node.add("🔑 Indexes")
-                    indexes_node.data = {"type": "indexes_folder", "schema": schema_name}
-                    
-                    functions_node = schema_node.add("⚡ Functions")
-                    functions_node.data = {"type": "functions_folder", "schema": schema_name}
-                    
-                    sequences_node = schema_node.add("🔢 Sequences")
-                    sequences_node.data = {"type": "sequences_folder", "schema": schema_name}
-                    
-                    matviews_node = schema_node.add("📊 Materialized Views")
-                    matviews_node.data = {"type": "matviews_folder", "schema": schema_name}
-                    
-                    types_node = schema_node.add("🏷 Types")
-                    types_node.data = {"type": "types_folder", "schema": schema_name}
                     
                     # Load tables for public schema immediately
                     if schema_name == 'public':
@@ -183,204 +165,6 @@ class DatabaseTab(TabPane):
         except Exception as e:
             logger.error(f"Error loading tables: {e}")
     
-    async def load_views(self, parent_node, schema: str) -> None:
-        """Load views for a schema."""
-        try:
-            query = """
-                SELECT viewname 
-                FROM pg_catalog.pg_views 
-                WHERE schemaname = %s
-                ORDER BY viewname
-            """
-            
-            results = await self.connection_manager.execute_query(query, (schema,))
-            
-            # Clear placeholder
-            parent_node.remove_children()
-            
-            if results:
-                for row in results:
-                    view_name = row['viewname']
-                    view_node = parent_node.add(f"👁 {view_name}")
-                    view_node.data = {
-                        "type": "view",
-                        "schema": schema,
-                        "name": view_name
-                    }
-                logger.info(f"Loaded {len(results)} views for schema {schema}")
-            else:
-                parent_node.add("(empty)")
-                
-        except Exception as e:
-            logger.error(f"Error loading views: {e}")
-    
-    async def load_indexes(self, parent_node, schema: str) -> None:
-        """Load indexes for a schema."""
-        try:
-            query = """
-                SELECT indexname, tablename
-                FROM pg_indexes
-                WHERE schemaname = %s
-                ORDER BY indexname
-            """
-            
-            results = await self.connection_manager.execute_query(query, (schema,))
-            
-            # Clear placeholder
-            parent_node.remove_children()
-            
-            if results:
-                for row in results:
-                    index_name = row['indexname']
-                    table_name = row['tablename']
-                    index_node = parent_node.add(f"🔑 {index_name} ({table_name})")
-                    index_node.data = {
-                        "type": "index",
-                        "schema": schema,
-                        "name": index_name,
-                        "table": table_name
-                    }
-                logger.info(f"Loaded {len(results)} indexes for schema {schema}")
-            else:
-                parent_node.add("(empty)")
-                
-        except Exception as e:
-            logger.error(f"Error loading indexes: {e}")
-    
-    async def load_functions(self, parent_node, schema: str) -> None:
-        """Load functions for a schema."""
-        try:
-            query = """
-                SELECT proname, pg_catalog.pg_get_function_arguments(p.oid) as args
-                FROM pg_catalog.pg_proc p
-                JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
-                WHERE n.nspname = %s
-                ORDER BY proname
-                LIMIT 100
-            """
-            
-            results = await self.connection_manager.execute_query(query, (schema,))
-            
-            # Clear placeholder
-            parent_node.remove_children()
-            
-            if results:
-                for row in results:
-                    func_name = row['proname']
-                    args = row['args'] or ''
-                    display_name = f"{func_name}({args[:30]}{'...' if len(args) > 30 else ''})"
-                    func_node = parent_node.add(f"⚡ {display_name}")
-                    func_node.data = {
-                        "type": "function",
-                        "schema": schema,
-                        "name": func_name,
-                        "args": args
-                    }
-                logger.info(f"Loaded {len(results)} functions for schema {schema}")
-            else:
-                parent_node.add("(empty)")
-                
-        except Exception as e:
-            logger.error(f"Error loading functions: {e}")
-    
-    async def load_sequences(self, parent_node, schema: str) -> None:
-        """Load sequences for a schema."""
-        try:
-            query = """
-                SELECT sequence_name
-                FROM information_schema.sequences
-                WHERE sequence_schema = %s
-                ORDER BY sequence_name
-            """
-            
-            results = await self.connection_manager.execute_query(query, (schema,))
-            
-            # Clear placeholder
-            parent_node.remove_children()
-            
-            if results:
-                for row in results:
-                    seq_name = row['sequence_name']
-                    seq_node = parent_node.add(f"🔢 {seq_name}")
-                    seq_node.data = {
-                        "type": "sequence",
-                        "schema": schema,
-                        "name": seq_name
-                    }
-                logger.info(f"Loaded {len(results)} sequences for schema {schema}")
-            else:
-                parent_node.add("(empty)")
-                
-        except Exception as e:
-            logger.error(f"Error loading sequences: {e}")
-    
-    async def load_matviews(self, parent_node, schema: str) -> None:
-        """Load materialized views for a schema."""
-        try:
-            query = """
-                SELECT matviewname 
-                FROM pg_matviews 
-                WHERE schemaname = %s
-                ORDER BY matviewname
-            """
-            
-            results = await self.connection_manager.execute_query(query, (schema,))
-            
-            # Clear placeholder
-            parent_node.remove_children()
-            
-            if results:
-                for row in results:
-                    mv_name = row['matviewname']
-                    mv_node = parent_node.add(f"📊 {mv_name}")
-                    mv_node.data = {
-                        "type": "matview",
-                        "schema": schema,
-                        "name": mv_name
-                    }
-                logger.info(f"Loaded {len(results)} materialized views for schema {schema}")
-            else:
-                parent_node.add("(empty)")
-                
-        except Exception as e:
-            logger.error(f"Error loading materialized views: {e}")
-    
-    async def load_types(self, parent_node, schema: str) -> None:
-        """Load custom types for a schema."""
-        try:
-            query = """
-                SELECT t.typname
-                FROM pg_type t
-                JOIN pg_namespace n ON t.typnamespace = n.oid
-                WHERE n.nspname = %s
-                AND t.typtype IN ('c', 'e', 'd', 'r')  -- composite, enum, domain, range
-                AND NOT EXISTS (
-                    SELECT 1 FROM pg_class c WHERE c.oid = t.typrelid AND c.relkind = 'c'
-                )
-                ORDER BY t.typname
-            """
-            
-            results = await self.connection_manager.execute_query(query, (schema,))
-            
-            # Clear placeholder
-            parent_node.remove_children()
-            
-            if results:
-                for row in results:
-                    type_name = row['typname']
-                    type_node = parent_node.add(f"🏷 {type_name}")
-                    type_node.data = {
-                        "type": "custom_type",
-                        "schema": schema,
-                        "name": type_name
-                    }
-                logger.info(f"Loaded {len(results)} types for schema {schema}")
-            else:
-                parent_node.add("(empty)")
-                
-        except Exception as e:
-            logger.error(f"Error loading types: {e}")
-    
     async def on_tree_node_expanded(self, event) -> None:
         """Handle node expansion for lazy loading."""
         node = event.node
@@ -388,24 +172,12 @@ class DatabaseTab(TabPane):
             return
         
         node_type = node.data.get("type")
-        schema = node.data.get("schema")
         
-        # Only load if not already loaded (no children)
-        if schema and not node.children:
-            if node_type == "tables_folder":
+        # Load tables when expanding tables folder
+        if node_type == "tables_folder":
+            schema = node.data.get("schema")
+            if schema and not node.children:  # Only load if not already loaded
                 await self.load_tables(node, schema)
-            elif node_type == "views_folder":
-                await self.load_views(node, schema)
-            elif node_type == "indexes_folder":
-                await self.load_indexes(node, schema)
-            elif node_type == "functions_folder":
-                await self.load_functions(node, schema)
-            elif node_type == "sequences_folder":
-                await self.load_sequences(node, schema)
-            elif node_type == "matviews_folder":
-                await self.load_matviews(node, schema)
-            elif node_type == "types_folder":
-                await self.load_types(node, schema)
     
     async def on_tree_node_selected(self, event) -> None:
         """Handle node selection."""
@@ -414,72 +186,18 @@ class DatabaseTab(TabPane):
             return
         
         node_type = node.data.get("type")
-        schema = node.data.get("schema")
-        name = node.data.get("name")
         
         if node_type == "table":
+            schema = node.data.get("schema")
+            table = node.data.get("name")
+            
             # Update query input
-            query = f"SELECT * FROM {schema}.{name} LIMIT 100;"
+            query = f"SELECT * FROM {schema}.{table} LIMIT 100;"
             if self.query_input:
                 self.query_input.text = query
             
             # Post message for main app to handle
-            self.post_message(TableSelected(schema, name))
-            
-        elif node_type == "view":
-            # Update query input for view
-            query = f"SELECT * FROM {schema}.{name} LIMIT 100;"
-            if self.query_input:
-                self.query_input.text = query
-            
-            # Post message (reuse TableSelected for views)
-            self.post_message(TableSelected(schema, name))
-            
-        elif node_type == "index":
-            # Show index definition
-            table = node.data.get("table")
-            query = f"SELECT indexdef FROM pg_indexes WHERE schemaname = '{schema}' AND indexname = '{name}';"
-            if self.query_input:
-                self.query_input.text = query
-                
-        elif node_type == "function":
-            # Show function definition
-            query = f"SELECT pg_get_functiondef(p.oid) FROM pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid WHERE n.nspname = '{schema}' AND p.proname = '{name}' LIMIT 1;"
-            if self.query_input:
-                self.query_input.text = query
-                
-        elif node_type == "sequence":
-            # Show sequence info
-            query = f"SELECT * FROM {schema}.{name};"
-            if self.query_input:
-                self.query_input.text = query
-                
-        elif node_type == "matview":
-            # Query materialized view
-            query = f"SELECT * FROM {schema}.{name} LIMIT 100;"
-            if self.query_input:
-                self.query_input.text = query
-            
-            # Post message (reuse TableSelected for matviews)
-            self.post_message(TableSelected(schema, name))
-            
-        elif node_type == "custom_type":
-            # Show type definition
-            query = f"""
-                SELECT t.typname, t.typtype,
-                       CASE t.typtype
-                           WHEN 'c' THEN 'composite'
-                           WHEN 'e' THEN 'enum'
-                           WHEN 'd' THEN 'domain'
-                           WHEN 'r' THEN 'range'
-                       END as type_kind,
-                       pg_catalog.format_type(t.oid, NULL) as definition
-                FROM pg_type t
-                JOIN pg_namespace n ON t.typnamespace = n.oid
-                WHERE n.nspname = '{schema}' AND t.typname = '{name}';
-            """
-            if self.query_input:
-                self.query_input.text = query.strip()
+            self.post_message(TableSelected(schema, table))
 
 
 class PgAdminTUI(App):

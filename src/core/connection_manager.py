@@ -77,14 +77,18 @@ class DatabaseConnection:
             self.status = ConnectionStatus.CONNECTING
             self._notify_callbacks()
             
-            # Create connection pool
+            # Create connection pool (don't open in constructor)
             self.pool = AsyncConnectionPool(
                 self.config.get_dsn(),
                 min_size=self.config.min_pool_size,
                 max_size=self.config.pool_size,
                 timeout=self.config.connection_timeout,
-                kwargs={"row_factory": dict_row}
+                kwargs={"row_factory": dict_row},
+                open=False  # Don't open in constructor
             )
+            
+            # Open the pool
+            await self.pool.open()
             
             # Test connection
             async with self.pool.connection() as conn:
@@ -284,7 +288,13 @@ class ConnectionManager:
                     
                     # Check if query returns results
                     if cursor.description:
-                        return await cursor.fetchall()
+                        rows = await cursor.fetchall()
+                        # The connection already has dict_row factory, so rows should be dicts
+                        # But if they're not, convert them
+                        if rows and not isinstance(rows[0], dict):
+                            columns = [desc.name for desc in cursor.description]
+                            return [dict(zip(columns, row)) for row in rows]
+                        return rows
                     return []
                     
         except Exception as e:

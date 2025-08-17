@@ -188,3 +188,8 @@ class QueryInput(Widget):
         elif self.history_index == len(self.query_history) - 1:
             self.history_index = len(self.query_history)
             self.clear()
+    
+    def focus(self) -> None:
+        """Focus the text area."""
+        if hasattr(self, 'text_area'):
+            self.text_area.focus()
