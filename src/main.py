@@ -5,7 +5,9 @@ import logging
 import os
 import sys
 import urllib.parse
-from typing import Optional
+import yaml
+from typing import Optional, List, Dict, Any
+from pathlib import Path
 
 # Add parent directory to path for imports
 if __name__ == "__main__":
@@ -19,7 +21,7 @@ from textual.widgets import Header, Footer, TabbedContent, TabPane, Static, Labe
 from textual.message import Message
 
 # Import our modules
-from src.core.connection_manager import ConnectionManager, DatabaseConfig
+from src.core.connection_manager import ConnectionManager, DatabaseConfig, ConnectionStatus
 from src.core.query_executor import QueryExecutor, SecurityGuard
 
 # Configure logging to file only (not to console)
@@ -65,6 +67,29 @@ class DatabaseTab(TabPane):
         self.tree_widget = None
         self.query_input = None
         self.data_table = None
+        self.current_query = None  # Store current query for re-execution with sorting
+        self.current_table = None  # Store current table/view for sorting
+        self.sort_column = None  # Track which column is sorted
+        self.sort_direction = "ASC"  # Track sort direction (ASC/DESC)
+        self.column_map = {}  # Map ColumnKey objects to actual column names
+    
+    def update_label(self, new_label: str) -> None:
+        """Update the tab label."""
+        try:
+            # Update the label property
+            self.label = new_label
+            
+            # Try multiple refresh strategies
+            if self.parent:
+                self.parent.refresh()
+                
+            # Also try refreshing the app's tabbed content
+            if hasattr(self.app, 'tabbed_content') and self.app.tabbed_content:
+                self.app.tabbed_content.refresh()
+                
+            logger.info(f"Set label to: {new_label}, parent: {self.parent}")
+        except Exception as e:
+            logger.error(f"Error updating label: {e}")
         
     def compose(self) -> ComposeResult:
         """Compose the database tab layout."""
@@ -94,6 +119,32 @@ class DatabaseTab(TabPane):
     async def on_mount(self) -> None:
         """When the tab is mounted, refresh the tree if we have a connection."""
         if self.connection_manager:
+            # Connect to this database if not already connected
+            conn = self.connection_manager.connections.get(self.connection_name)
+            logger.info(f"Tab {self.connection_name} mounted, status: {conn.status if conn else 'No connection'}")
+            
+            if conn and conn.status != ConnectionStatus.CONNECTED:
+                self.app.notify(f"Connecting to {self.connection_name}...")
+                result = await self.connection_manager.connect_database(self.connection_name)
+                if result:
+                    self.app.notify(f"✅ Connected to {self.connection_name}", severity="success")
+                    # Update tab title to show connected status
+                    new_label = f"🟢 {self.connection_name}"
+                    self.update_label(new_label)
+                    logger.info(f"Updated tab label to: {new_label}")
+                else:
+                    self.app.notify(f"❌ Failed to connect to {self.connection_name}", severity="error")
+                    new_label = f"🔴 {self.connection_name}"
+                    self.update_label(new_label)
+                    logger.info(f"Updated tab label to: {new_label}")
+            elif conn and conn.status == ConnectionStatus.CONNECTED:
+                # Already connected, update label
+                new_label = f"🟢 {self.connection_name}"
+                self.update_label(new_label)
+                logger.info(f"Tab already connected, updated label to: {new_label}")
+            
+            # Switch to this database and refresh tree
+            self.connection_manager.switch_database(self.connection_name)
             await self.refresh_tree()
     
     async def refresh_tree(self) -> None:
@@ -108,7 +159,7 @@ class DatabaseTab(TabPane):
         
         # Get active connection
         conn = self.connection_manager.get_active_connection()
-        if not conn or conn.status.value != "connected":
+        if not conn or conn.status != ConnectionStatus.CONNECTED:
             self.tree_widget.root.add("No connection")
             return
         
@@ -435,6 +486,11 @@ class DatabaseTab(TabPane):
         name = node.data.get("name")
         
         if node_type == "table":
+            # Store current table info
+            self.current_table = {"schema": schema, "name": name, "type": "table"}
+            self.sort_column = None
+            self.sort_direction = "ASC"
+            
             # Update query input
             query = f"SELECT * FROM {schema}.{name} LIMIT 100;"
             if self.query_input:
@@ -444,6 +500,11 @@ class DatabaseTab(TabPane):
             self.post_message(TableSelected(schema, name))
             
         elif node_type == "view":
+            # Store current view info
+            self.current_table = {"schema": schema, "name": name, "type": "view"}
+            self.sort_column = None
+            self.sort_direction = "ASC"
+            
             # Update query input for view
             query = f"SELECT * FROM {schema}.{name} LIMIT 100;"
             if self.query_input:
@@ -472,6 +533,11 @@ class DatabaseTab(TabPane):
                 self.query_input.text = query
                 
         elif node_type == "matview":
+            # Store current matview info
+            self.current_table = {"schema": schema, "name": name, "type": "matview"}
+            self.sort_column = None
+            self.sort_direction = "ASC"
+            
             # Query materialized view
             query = f"SELECT * FROM {schema}.{name} LIMIT 100;"
             if self.query_input:
@@ -497,6 +563,56 @@ class DatabaseTab(TabPane):
             """
             if self.query_input:
                 self.query_input.text = query.strip()
+    
+    async def on_data_table_header_selected(self, event) -> None:
+        """Handle column header clicks for sorting."""
+        if not self.current_table or not self.data_table:
+            return
+        
+        # Find which column was clicked - we stored columns with index as key
+        column_name = None
+        columns_list = list(self.data_table.columns.values())
+        for idx, col in enumerate(columns_list):
+            if col.key == event.column_key:
+                # Look up the actual column name using the index
+                column_name = self.column_map.get(str(idx))
+                break
+        
+        if not column_name:
+            logger.warning(f"Could not find column for key: {event.column_key}")
+            return
+        
+        # Toggle sort direction if same column, otherwise reset
+        if self.sort_column == column_name:
+            self.sort_direction = "DESC" if self.sort_direction == "ASC" else "ASC"
+        else:
+            self.sort_column = column_name
+            self.sort_direction = "ASC"
+        
+        # Re-execute query with ORDER BY
+        await self.execute_sorted_query()
+    
+    async def execute_sorted_query(self) -> None:
+        """Execute the current table query with sorting."""
+        if not self.current_table:
+            return
+        
+        schema = self.current_table["schema"]
+        name = self.current_table["name"]
+        
+        # Build query with ORDER BY - properly quote column name
+        if self.sort_column:
+            # Quote the column name to handle special characters and reserved words
+            query = f'SELECT * FROM {schema}.{name} ORDER BY "{self.sort_column}" {self.sort_direction} LIMIT 100;'
+        else:
+            query = f"SELECT * FROM {schema}.{name} LIMIT 100;"
+        
+        # Update query input to show the sorted query
+        if self.query_input:
+            self.query_input.text = query
+        
+        # Execute via the main app
+        self.post_message(TableSelected(schema, name))
 
 
 class PgAdminTUI(App):
@@ -560,12 +676,14 @@ class PgAdminTUI(App):
         Binding("f1", "help", "Help"),
         Binding("f5", "refresh", "Refresh"),
         Binding("ctrl+enter", "execute_query", "Execute"),
+        Binding("s", "sort_column", "Sort", show=False),
     ]
     
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.connection_manager = ConnectionManager()
         self.tabbed_content = None
+        self.database_configs = []
         
     def compose(self) -> ComposeResult:
         """Compose the main application layout."""
@@ -576,6 +694,41 @@ class PgAdminTUI(App):
         
         yield Footer()
     
+    def load_databases_from_yaml(self, config_path: str = "databases.yaml") -> List[Dict[str, Any]]:
+        """Load database configurations from YAML file."""
+        config_file = Path(config_path)
+        
+        # Try multiple locations
+        if not config_file.exists():
+            # Try in current directory
+            config_file = Path.cwd() / config_path
+        
+        if not config_file.exists():
+            # Try in home directory
+            config_file = Path.home() / '.pgadmintui' / config_path
+        
+        if not config_file.exists():
+            logger.info(f"No databases.yaml found in any of the standard locations")
+            return []
+        
+        try:
+            logger.info(f"Loading database configurations from {config_file}")
+            with open(config_file, 'r') as f:
+                config_data = yaml.safe_load(f)
+                
+            if config_data and 'databases' in config_data:
+                databases = config_data['databases']
+                logger.info(f"Loaded {len(databases)} database configurations from {config_file}")
+                return databases
+            else:
+                logger.warning(f"No 'databases' section found in {config_file}")
+                return []
+                
+        except Exception as e:
+            logger.error(f"Error loading databases.yaml: {e}")
+            self.notify(f"Error loading databases.yaml: {e}", severity="error")
+            return []
+    
     async def on_mount(self) -> None:
         """Initialize the application when mounted."""
         logger.info("Application mounted, initializing...")
@@ -583,11 +736,57 @@ class PgAdminTUI(App):
         # Show where logs are being written
         self.notify(f"Logs: {log_file}", severity="information", timeout=3)
         
-        # Load database from environment
+        # Try to load databases from YAML first
+        self.database_configs = self.load_databases_from_yaml()
+        
+        if self.database_configs:
+            # Load databases from YAML
+            self.notify(f"Loading {len(self.database_configs)} databases from databases.yaml...")
+            
+            # Add all databases to connection manager
+            for db_config in self.database_configs:
+                try:
+                    # Replace environment variables in the config
+                    for key in ['username', 'password']:
+                        if key in db_config and db_config[key].startswith('${') and db_config[key].endswith('}'):
+                            env_var = db_config[key][2:-1]
+                            db_config[key] = os.environ.get(env_var, db_config[key])
+                    
+                    config = DatabaseConfig(**db_config)
+                    self.connection_manager.add_database(config)
+                    logger.info(f"Added database config: {db_config['name']}")
+                except Exception as e:
+                    logger.error(f"Error adding database {db_config.get('name', 'unknown')}: {e}")
+                    self.notify(f"Error adding database {db_config.get('name', 'unknown')}: {e}", severity="error")
+            
+            # Create tabs for each database (without connecting yet)
+            for db_config in self.database_configs:
+                try:
+                    db_name = db_config['name']
+                    tab = DatabaseTab(
+                        f"⚪ {db_name}", 
+                        db_name,
+                        connection_manager=self.connection_manager
+                    )
+                    self.tabbed_content.add_pane(tab)
+                    logger.info(f"Created tab for database: {db_name}")
+                except Exception as e:
+                    logger.error(f"Error creating tab for {db_config.get('name', 'unknown')}: {e}")
+            
+            # Databases will connect when their tabs are activated
+            self.notify("Click on a database tab to connect", severity="information")
+            return
+        
+        # Fall back to DATABASE_URL environment variable
         db_url = os.environ.get('DATABASE_URL')
         if not db_url:
             # Show help
-            help_tab = TabPane("No Database", Static("Please set DATABASE_URL environment variable"))
+            help_tab = TabPane("No Database", Static(
+                "No databases.yaml found and DATABASE_URL not set.\n\n"
+                "Please either:\n"
+                "1. Create a databases.yaml file with your database configurations\n"
+                "2. Set the DATABASE_URL environment variable"
+            ))
             self.tabbed_content.add_pane(help_tab)
             return
         
@@ -637,8 +836,15 @@ class PgAdminTUI(App):
         """Handle table selection."""
         logger.info(f"Table selected: {event.schema}.{event.table}")
         
-        # Execute query
-        query = f"SELECT * FROM {event.schema}.{event.table} LIMIT 100"
+        # Get active tab to check for sorting
+        active_pane = self.tabbed_content.active_pane if self.tabbed_content else None
+        if isinstance(active_pane, DatabaseTab) and active_pane.sort_column:
+            # Use sorted query with properly quoted column name
+            query = f'SELECT * FROM {event.schema}.{event.table} ORDER BY "{active_pane.sort_column}" {active_pane.sort_direction} LIMIT 100'
+        else:
+            # Default query
+            query = f"SELECT * FROM {event.schema}.{event.table} LIMIT 100"
+        
         await self.execute_query(query)
     
     async def execute_query(self, query: str = None) -> None:
@@ -666,12 +872,21 @@ class PgAdminTUI(App):
             # Clear and update data table
             if active_pane.data_table:
                 active_pane.data_table.clear(columns=True)
+                active_pane.column_map.clear()  # Clear the column mapping
                 
                 if results:
-                    # Add columns
+                    # Add columns with sortable headers
                     columns = list(results[0].keys())
-                    for col in columns:
-                        active_pane.data_table.add_column(col)
+                    for i, col in enumerate(columns):
+                        # Add sort indicator to column header if this column is sorted
+                        header = col
+                        if active_pane.sort_column == col:
+                            indicator = " ▼" if active_pane.sort_direction == "DESC" else " ▲"
+                            header = f"{col}{indicator}"
+                        # Add column - use index as key to avoid issues
+                        active_pane.data_table.add_column(header, key=str(i))
+                        # Store column name by index for easier lookup
+                        active_pane.column_map[str(i)] = col
                     
                     # Add rows (limit display)
                     for row in results[:1000]:
@@ -684,7 +899,12 @@ class PgAdminTUI(App):
                                 display_row.append(str(val)[:100])
                         active_pane.data_table.add_row(*display_row)
                     
-                    self.notify(f"Query returned {len(results)} rows", severity="success")
+                    # Show appropriate message
+                    if active_pane.sort_column:
+                        direction = "descending" if active_pane.sort_direction == "DESC" else "ascending"
+                        self.notify(f"Query returned {len(results)} rows, sorted by {active_pane.sort_column} ({direction})", severity="success")
+                    else:
+                        self.notify(f"Query returned {len(results)} rows (click column headers to sort)", severity="success")
                 else:
                     active_pane.data_table.add_column("Result")
                     active_pane.data_table.add_row("No results")
@@ -708,6 +928,36 @@ class PgAdminTUI(App):
         """Execute the current query."""
         await self.execute_query()
     
+    async def action_sort_column(self) -> None:
+        """Sort by current column in DataTable."""
+        active_pane = self.tabbed_content.active_pane if self.tabbed_content else None
+        
+        if not isinstance(active_pane, DatabaseTab):
+            return
+        
+        if not active_pane.current_table or not active_pane.data_table:
+            self.notify("No table selected to sort", severity="warning")
+            return
+        
+        # Get the current cursor column
+        if active_pane.data_table.cursor_column >= 0:
+            # Get column at cursor position - use index to look up name
+            column_name = active_pane.column_map.get(str(active_pane.data_table.cursor_column))
+            
+            if not column_name:
+                self.notify("Could not determine column name", severity="warning")
+                return
+            
+            # Toggle sort direction if same column, otherwise reset
+            if active_pane.sort_column == column_name:
+                active_pane.sort_direction = "DESC" if active_pane.sort_direction == "ASC" else "ASC"
+            else:
+                active_pane.sort_column = column_name
+                active_pane.sort_direction = "ASC"
+            
+            # Re-execute query with sorting
+            await active_pane.execute_sorted_query()
+    
     async def action_help(self) -> None:
         """Show help."""
         help_text = """
@@ -715,10 +965,49 @@ Keyboard Shortcuts:
 - Ctrl+Q: Quit
 - Ctrl+Enter: Execute query
 - F5: Refresh tree
+- S: Sort by current column
 - Enter: Select table/view
 - Arrow keys: Navigate
+
+Table Sorting:
+- Click column headers to sort
+- Press 'S' on a column to sort
+- Click/press again to reverse
+- ▲ = ascending, ▼ = descending
 """
         self.notify(help_text, severity="information", timeout=10)
+    
+    async def on_tabbed_content_tab_activated(self, event) -> None:
+        """Handle tab activation - connect to database if needed."""
+        active_pane = self.tabbed_content.active_pane if self.tabbed_content else None
+        
+        if isinstance(active_pane, DatabaseTab):
+            # Connect to this database if not already connected
+            conn = self.connection_manager.connections.get(active_pane.connection_name)
+            if conn and conn.status != ConnectionStatus.CONNECTED:
+                self.notify(f"Connecting to {active_pane.connection_name}...")
+                result = await self.connection_manager.connect_database(active_pane.connection_name)
+                if result:
+                    self.notify(f"✅ Connected to {active_pane.connection_name}", severity="success")
+                    # Update tab label to show connected status
+                    active_pane.update_label(f"🟢 {active_pane.connection_name}")
+                    logger.info(f"Tab activated, updated label to: 🟢 {active_pane.connection_name}")
+                else:
+                    self.notify(f"❌ Failed to connect to {active_pane.connection_name}", severity="error")
+                    active_pane.update_label(f"🔴 {active_pane.connection_name}")
+                    logger.info(f"Tab activated, connection failed, updated label to: 🔴 {active_pane.connection_name}")
+                    return
+            elif conn and conn.status == ConnectionStatus.CONNECTED:
+                # Already connected, ensure label shows correct status
+                active_pane.update_label(f"🟢 {active_pane.connection_name}")
+                logger.info(f"Tab activated, already connected, label: 🟢 {active_pane.connection_name}")
+            
+            # Switch active connection
+            self.connection_manager.switch_database(active_pane.connection_name)
+            
+            # Refresh tree if needed
+            if conn and conn.status == ConnectionStatus.CONNECTED:
+                await active_pane.refresh_tree()
     
     async def action_quit(self) -> None:
         """Quit the application."""
