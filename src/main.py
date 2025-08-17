@@ -1647,6 +1647,9 @@ class PgAdminTUI(App):
             has_filters = active_pane.filter_state and active_pane.filter_state.has_filters()
             has_sorting = active_pane.sort_column is not None
             table_name = f"{active_pane.current_table['schema']}.{active_pane.current_table['name']}"
+            
+            # Table queries have a default LIMIT 100
+            existing_limit = 100
         
         # Get row counts
         row_count = active_pane.data_table.row_count
@@ -1710,6 +1713,10 @@ class PgAdminTUI(App):
             if options.use_filtered_data:
                 # Use current displayed data
                 data = await self._get_current_data(active_pane)
+                # Apply max_rows limit if specified
+                if options.max_rows and len(data) > options.max_rows:
+                    data = data[:options.max_rows]
+                    logger.info(f"Limited filtered data to {options.max_rows} rows for export")
             else:
                 # Get original data without filters/sorting
                 if is_manual:
@@ -1746,11 +1753,17 @@ class PgAdminTUI(App):
                     schema = active_pane.current_table['schema']
                     table = active_pane.current_table['name']
                     query = f'SELECT * FROM "{schema}"."{table}"'
+                    
                     if options.max_rows:
+                        # User specified a max_rows in export dialog - use it
                         query += f' LIMIT {options.max_rows}'
+                        logger.info(f"Using user's max_rows for table export: {options.max_rows}")
                     else:
-                        # Add default limit for safety
-                        query += ' LIMIT 100000'
+                        # No user preference - use the table's default LIMIT 100
+                        # (matches what's shown in the table view)
+                        query += ' LIMIT 100'
+                        logger.info("Using table's default LIMIT 100 for export")
+                    
                     data = await self._execute_query_for_export(query)
             
             if not data:
