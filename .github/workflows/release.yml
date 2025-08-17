@@ -1,0 +1,193 @@
+name: Build Release Binaries
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest, macos-13]
+        include:
+          - os: ubuntu-latest
+            artifact_name: pgadmintui-linux-x86_64
+            asset_name: pgadmintui-linux-x86_64.tar.gz
+          - os: windows-latest
+            artifact_name: pgadmintui-windows-x86_64.exe
+            asset_name: pgadmintui-windows-x86_64.zip
+          - os: macos-latest
+            artifact_name: pgadmintui-macos-arm64
+            asset_name: pgadmintui-macos-arm64.tar.gz
+          - os: macos-13
+            artifact_name: pgadmintui-macos-x86_64
+            asset_name: pgadmintui-macos-x86_64.tar.gz
+
+    runs-on: ${{ matrix.os }}
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pyinstaller
+    
+    - name: Build with PyInstaller (Unix)
+      if: runner.os != 'Windows'
+      run: |
+        pyinstaller pgadmintui.spec --clean
+        chmod +x dist/pgadmintui
+    
+    - name: Build with PyInstaller (Windows)
+      if: runner.os == 'Windows'
+      run: |
+        pyinstaller pgadmintui.spec --clean
+    
+    - name: Package binary (Linux)
+      if: runner.os == 'Linux'
+      run: |
+        cd dist
+        tar -czf ../${{ matrix.asset_name }} pgadmintui
+        cd ..
+    
+    - name: Package binary (macOS)
+      if: runner.os == 'macOS'
+      run: |
+        cd dist
+        tar -czf ../${{ matrix.asset_name }} pgadmintui
+        cd ..
+    
+    - name: Package binary (Windows)
+      if: runner.os == 'Windows'
+      run: |
+        Compress-Archive -Path dist\pgadmintui.exe -DestinationPath ${{ matrix.asset_name }}
+    
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ matrix.artifact_name }}
+        path: ${{ matrix.asset_name }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: ./artifacts
+    
+    - name: Create Release
+      id: create_release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ github.ref }}
+        release_name: Release ${{ github.ref }}
+        draft: false
+        prerelease: false
+        body: |
+          ## 🚀 What's New
+
+          ### ✨ Advanced Column Filtering
+          - **Smart Filters**: Apply filters to any column with type-specific operators
+          - **Multiple Data Types**: Text, numeric, date, and boolean filtering
+          - **Rich Operators**: Contains, equals, greater than, between, regex, and more
+          - **Visual Indicators**: [F] markers show which columns have active filters
+          - **Easy Management**: F4 to filter, Alt+F to clear all filters
+
+          ### 🗄️ Multi-Database Support
+          - **YAML Configuration**: Define multiple databases in a single config file
+          - **Tab Interface**: Each database gets its own tab for easy switching
+          - **Lazy Connections**: Databases connect only when you access them
+          - **Status Indicators**: Visual connection status (🟢 connected, 🔴 failed)
+
+          ### 📊 Enhanced Table Interaction
+          - **Column Sorting**: Click headers or press 'S' to sort any column
+          - **Sort Indicators**: ▲ ascending, ▼ descending markers
+          - **Combined Features**: Use filtering and sorting together
+
+          ## 📦 Installation
+
+          Download the appropriate binary for your platform from the assets below.
+
+          ### Linux
+          ```bash
+          tar -xzf pgadmintui-linux-x86_64.tar.gz
+          chmod +x pgadmintui
+          ./pgadmintui --help
+          ```
+
+          ### macOS (Apple Silicon)
+          ```bash
+          tar -xzf pgadmintui-macos-arm64.tar.gz
+          chmod +x pgadmintui
+          ./pgadmintui --help
+          ```
+
+          ### macOS (Intel)
+          ```bash
+          tar -xzf pgadmintui-macos-x86_64.tar.gz
+          chmod +x pgadmintui
+          ./pgadmintui --help
+          ```
+
+          ### Windows
+          ```powershell
+          Expand-Archive pgadmintui-windows-x86_64.zip
+          .\pgadmintui.exe --help
+          ```
+    
+    - name: Upload Linux Binary
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ./artifacts/pgadmintui-linux-x86_64/pgadmintui-linux-x86_64.tar.gz
+        asset_name: pgadmintui-linux-x86_64.tar.gz
+        asset_content_type: application/gzip
+    
+    - name: Upload Windows Binary
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ./artifacts/pgadmintui-windows-x86_64.exe/pgadmintui-windows-x86_64.zip
+        asset_name: pgadmintui-windows-x86_64.zip
+        asset_content_type: application/zip
+    
+    - name: Upload macOS ARM64 Binary
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ./artifacts/pgadmintui-macos-arm64/pgadmintui-macos-arm64.tar.gz
+        asset_name: pgadmintui-macos-arm64.tar.gz
+        asset_content_type: application/gzip
+    
+    - name: Upload macOS x86_64 Binary
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ./artifacts/pgadmintui-macos-x86_64/pgadmintui-macos-x86_64.tar.gz
+        asset_name: pgadmintui-macos-x86_64.tar.gz
+        asset_content_type: application/gzip
