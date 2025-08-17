@@ -1,0 +1,36 @@
+# Whitelist configuration for allowed SQL commands
+whitelist:
+  enabled: true
+  commands:
+    - pattern: "^SELECT"
+      description: "Read-only queries"
+      
+    - pattern: "^WITH\\s+.*\\s+SELECT"
+      description: "CTE read queries"
+      
+    - pattern: "^SHOW"
+      description: "Show configuration"
+      
+    - pattern: "^EXPLAIN"
+      description: "Query plans"
+      
+    - pattern: "^\\\\\\w+"
+      description: "psql meta-commands"
+      
+    - pattern: "^BEGIN"
+      description: "Transaction control"
+      
+    - pattern: "^COMMIT"
+      description: "Transaction control"
+      
+    - pattern: "^ROLLBACK"
+      description: "Transaction control"
+      
+    - pattern: "^SAVEPOINT"
+      description: "Transaction savepoints"
+      
+    - pattern: "^SET\\s+(SESSION|LOCAL)"
+      description: "Session configuration"
+      
+    - pattern: "^ANALYZE"
+      description: "Table statistics"

@@ -1,0 +1,5 @@
+# Minimal requirements for testing without PostgreSQL
+textual>=0.47.0
+click>=8.1.0
+pyyaml>=6.0
+python-dotenv>=1.0.0

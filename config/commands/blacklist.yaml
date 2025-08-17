@@ -1,0 +1,53 @@
+# Blacklist configuration for dangerous SQL commands
+blacklist:
+  enabled: true
+  commands:
+    - pattern: "^DROP\\s+(DATABASE|SCHEMA|TABLE|VIEW|FUNCTION|INDEX|SEQUENCE)"
+      severity: "critical"
+      message: "DROP commands are not allowed in safe mode"
+      allow_with_confirmation: false
+      
+    - pattern: "^TRUNCATE"
+      severity: "critical"
+      message: "TRUNCATE commands are not allowed in safe mode"
+      allow_with_confirmation: false
+      
+    - pattern: "^DELETE\\s+FROM\\s+\\w+\\s*$"
+      severity: "high"
+      message: "DELETE without WHERE clause is extremely dangerous"
+      allow_with_confirmation: false
+      
+    - pattern: "^DELETE\\s+FROM"
+      severity: "medium"
+      message: "DELETE commands require confirmation"
+      allow_with_confirmation: true
+      
+    - pattern: "^UPDATE\\s+\\w+\\s+SET(?!.*WHERE)"
+      severity: "high"
+      message: "UPDATE without WHERE clause affects all rows"
+      allow_with_confirmation: false
+      
+    - pattern: "^UPDATE"
+      severity: "medium"
+      message: "UPDATE commands require confirmation"
+      allow_with_confirmation: true
+      
+    - pattern: "^ALTER\\s+(DATABASE|SCHEMA|TABLE)"
+      severity: "medium"
+      message: "ALTER commands modify database structure"
+      allow_with_confirmation: true
+      
+    - pattern: "^CREATE\\s+(DATABASE|SCHEMA|USER|ROLE)"
+      severity: "low"
+      message: "CREATE commands will add new database objects"
+      allow_with_confirmation: true
+      
+    - pattern: "^GRANT"
+      severity: "medium"
+      message: "GRANT commands modify permissions"
+      allow_with_confirmation: true
+      
+    - pattern: "^REVOKE"
+      severity: "medium"
+      message: "REVOKE commands modify permissions"
+      allow_with_confirmation: true

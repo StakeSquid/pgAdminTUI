@@ -1,0 +1,42 @@
+# Example database configuration file
+# Copy this to databases.yaml and update with your database details
+
+databases:
+  - name: "local_dev"
+    host: "localhost"
+    port: 5432
+    database: "myapp_dev"
+    username: "${DB_USER}"  # Use environment variable
+    password: "${DB_PASS}"  # Use environment variable
+    ssl_mode: "prefer"
+    connection_timeout: 5
+    query_timeout: 30
+    pool_size: 5
+    retry_attempts: 3
+    retry_delay: 1000
+    
+  - name: "production"
+    host: "prod.example.com"
+    port: 5432
+    database: "myapp_prod"
+    username: "${PROD_DB_USER}"
+    password: "${PROD_DB_PASS}"
+    ssl_mode: "require"
+    connection_timeout: 10
+    query_timeout: 60
+    pool_size: 10
+    retry_attempts: 5
+    retry_delay: 2000
+    
+  - name: "staging"
+    host: "staging.example.com"
+    port: 5432
+    database: "myapp_staging"
+    username: "${STAGING_DB_USER}"
+    password: "${STAGING_DB_PASS}"
+    ssl_mode: "require"
+    connection_timeout: 5
+    query_timeout: 30
+    pool_size: 5
+    retry_attempts: 3
+    retry_delay: 1000

@@ -1,0 +1,64 @@
+# Default configuration for pgAdminTUI
+app:
+  theme: "dark"
+  refresh_interval: 30  # seconds
+  max_rows_display: 1000
+  default_page_size: 100
+  confirm_destructive: true
+  auto_complete: true
+  show_row_numbers: true
+  
+databases: []  # Will be populated from databases.yaml or environment
+
+keybindings:
+  quit: "ctrl+q"
+  help: "f1"
+  search: "/"
+  command: ":"
+  refresh: "f5"
+  query_mode: "f2"
+  export: "f3"
+  filter: "f4"
+  next_tab: "ctrl+tab"
+  prev_tab: "ctrl+shift+tab"
+  
+appearance:
+  colors:
+    primary: "#00D9FF"
+    success: "#00FF00"
+    warning: "#FFA500"
+    error: "#FF0000"
+    background: "#1e1e2e"
+    foreground: "#cdd6f4"
+  
+query:
+  timeout: 30  # seconds
+  enable_timing: true
+  history_size: 1000
+  
+export:
+  default_format: "csv"
+  default_path: "./exports"
+  
+  csv:
+    delimiter: ","
+    quote_char: '"'
+    include_headers: true
+    null_string: "NULL"
+  
+  json:
+    pretty_print: true
+    date_format: "ISO8601"
+    null_value: null
+  
+  sql:
+    include_create_table: false
+    use_insert: true
+    batch_size: 1000
+
+safety:
+  read_only_mode: false
+  transaction_wrap: true
+  confirm_destructive: true
+  max_rows_delete: 100
+  max_rows_update: 1000

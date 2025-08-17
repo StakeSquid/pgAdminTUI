@@ -1,0 +1,27 @@
+# Core dependencies
+textual>=0.47.0
+psycopg[binary,pool]>=3.1.0
+asyncpg>=0.29.0
+pyyaml>=6.0
+python-dotenv>=1.0.0
+keyring>=24.0.0
+
+# UI and formatting
+rich>=13.0.0
+click>=8.1.0
+
+# Data handling
+pandas>=2.0.0
+tabulate>=0.9.0
+openpyxl>=3.1.0  # For Excel export
+
+# Development dependencies
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+mypy>=1.5.0
+black>=23.0.0
+flake8>=6.0.0
+pytest-cov>=4.1.0
+
+# Type stubs
+types-PyYAML>=6.0.0
