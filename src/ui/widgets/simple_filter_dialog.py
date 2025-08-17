@@ -159,11 +159,37 @@ class SimpleFilterDialog(Container):
         
         # Update operators
         if self.operator_select:
-            self.operator_select.set_options(self._get_operator_options())
+            options = self._get_operator_options()
+            self.operator_select.set_options(options)
             
             # Set existing operator if we have a filter
-            if existing_filter:
-                self.operator_select.value = existing_filter.operator.value
+            if existing_filter and existing_filter.operator:
+                try:
+                    self.operator_select.value = existing_filter.operator.value
+                    
+                    # Update UI based on operator
+                    operator = existing_filter.operator
+                    
+                    # Show/hide second input for BETWEEN
+                    if self.value_input2:
+                        self.value_input2.display = operator in (
+                            FilterOperator.BETWEEN, 
+                            FilterOperator.DATE_BETWEEN
+                        )
+                    
+                    # Disable value input for NULL operators
+                    if self.value_input:
+                        self.value_input.disabled = operator in (
+                            FilterOperator.IS_NULL,
+                            FilterOperator.IS_NOT_NULL
+                        )
+                except Exception as e:
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.warning(f"Could not set operator value: {e}")
+                    # Select first option if setting existing value fails
+                    if options:
+                        self.operator_select.value = options[0][1]
         
         # Set existing values if we have a filter
         if existing_filter:
@@ -223,7 +249,18 @@ class SimpleFilterDialog(Container):
     def on_select_changed(self, event: Select.Changed) -> None:
         """Handle operator change."""
         if event.select.id == "operator-select":
-            operator = FilterOperator(event.value)
+            # Check if the value is blank or invalid
+            if event.value is None or str(event.value) == "Select.BLANK":
+                return  # Ignore blank selections
+            
+            try:
+                operator = FilterOperator(event.value)
+            except (ValueError, KeyError):
+                # Invalid operator value, ignore
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Invalid operator value: {event.value}")
+                return
             
             # Show/hide second input for BETWEEN
             if self.value_input2:
@@ -242,6 +279,11 @@ class SimpleFilterDialog(Container):
     def apply_filter(self):
         """Apply the filter."""
         if not self.operator_select:
+            return
+        
+        # Check for blank selection
+        if self.operator_select.value is None or str(self.operator_select.value) == "Select.BLANK":
+            self.app.notify("Please select a filter operator", severity="warning")
             return
         
         try:
