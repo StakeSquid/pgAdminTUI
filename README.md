@@ -47,31 +47,29 @@ pip install -r requirements.txt
 
 You can configure database connections using **any one** of the following methods. You don't need to use all of them - pick the one that works best for your setup.
 
-### Method 1: Environment Variables Only (Simplest)
+### Method 1: Custom Configuration File (Most Flexible)
 
-Set a DATABASE_URL or PostgreSQL environment variables:
+Specify a custom configuration file using the `--config` option:
 
 ```bash
-# Option A: Using DATABASE_URL (common in cloud environments)
-export DATABASE_URL="postgresql://user:pass@localhost:5432/mydb"
-python -m src.main
+# Use a specific config file
+python -m src.main --config /path/to/my-config.yaml
 
-# Option B: Using PostgreSQL environment variables
-export PGHOST=localhost
-export PGPORT=5432
-export PGDATABASE=mydb
-export PGUSER=myuser
-export PGPASSWORD=mypass
-python -m src.main
+# Examples
+python -m src.main --config ~/configs/production-dbs.yaml
+python -m src.main -c staging.yaml
 ```
 
-### Method 2: databases.yaml File Only
+### Method 2: Default databases.yaml File
 
-Create a `databases.yaml` file with your credentials:
+Create a `databases.yaml` file in one of these locations:
+- Current directory
+- `~/.pgadmintui/databases.yaml`
 
 ```bash
 cp databases.yaml.example databases.yaml
-# Edit databases.yaml and add your credentials directly
+# Edit databases.yaml and add your credentials
+python -m src.main
 ```
 
 ```yaml
@@ -86,9 +84,18 @@ databases:
     ssl_mode: "prefer"
 ```
 
-### Method 3: databases.yaml with Environment Variable References
+### Method 3: Environment Variables Only (Simplest for Single DB)
 
-Use a `databases.yaml` file that references environment variables:
+Set a DATABASE_URL environment variable:
+
+```bash
+export DATABASE_URL="postgresql://user:pass@localhost:5432/mydb"
+python -m src.main
+```
+
+### Method 4: databases.yaml with Environment Variable References
+
+Use a configuration file that references environment variables:
 
 ```yaml
 # databases.yaml
@@ -101,25 +108,21 @@ databases:
     password: "${DB_PASS}"  # Will read from environment
 ```
 
-Then set the environment variables (via .env file or export):
+Then set the environment variables:
 
 ```bash
-# .env file
-DB_USER=myuser
-DB_PASS=mypass
-
-# OR export directly
 export DB_USER=myuser
 export DB_PASS=mypass
+python -m src.main
 ```
 
 ### Configuration Priority
 
-The application looks for database configurations in this order:
-1. **databases.yaml** file (if it exists)
-2. **Environment variables** (if no databases.yaml found)
-   - First checks for `DATABASE_URL`
-   - Then checks for `PGHOST`, `PGUSER`, `PGPASSWORD`, etc.
+The application loads database configurations in this order:
+1. **Custom config file** (if specified with `--config`)
+2. **databases.yaml** file in standard locations (if no `--config` provided)
+3. **Environment variables** (if no config file found)
+   - Uses `DATABASE_URL` if set
 
 ### Multiple Database Connections
 
@@ -146,17 +149,18 @@ databases:
 ### Basic Usage
 
 ```bash
-# Run with default configuration
+# Run with default configuration (looks for databases.yaml)
 python -m src.main
 
 # Run with custom config file
-python -m src.main --config myconfig.yaml
+python -m src.main --config /path/to/config.yaml
+python -m src.main -c production.yaml
 
-# Run in read-only mode
-python -m src.main --read-only
+# Run with debug logging
+python -m src.main --debug
 
-# Run with specific theme
-python -m src.main --theme dark
+# Combine options
+python -m src.main --config staging.yaml --debug
 ```
 
 ### Keyboard Shortcuts

@@ -73,23 +73,6 @@ class DatabaseTab(TabPane):
         self.sort_direction = "ASC"  # Track sort direction (ASC/DESC)
         self.column_map = {}  # Map ColumnKey objects to actual column names
     
-    def update_label(self, new_label: str) -> None:
-        """Update the tab label."""
-        try:
-            # Update the label property
-            self.label = new_label
-            
-            # Try multiple refresh strategies
-            if self.parent:
-                self.parent.refresh()
-                
-            # Also try refreshing the app's tabbed content
-            if hasattr(self.app, 'tabbed_content') and self.app.tabbed_content:
-                self.app.tabbed_content.refresh()
-                
-            logger.info(f"Set label to: {new_label}, parent: {self.parent}")
-        except Exception as e:
-            logger.error(f"Error updating label: {e}")
         
     def compose(self) -> ComposeResult:
         """Compose the database tab layout."""
@@ -128,20 +111,13 @@ class DatabaseTab(TabPane):
                 result = await self.connection_manager.connect_database(self.connection_name)
                 if result:
                     self.app.notify(f"✅ Connected to {self.connection_name}", severity="success")
-                    # Update tab title to show connected status
-                    new_label = f"🟢 {self.connection_name}"
-                    self.update_label(new_label)
-                    logger.info(f"Updated tab label to: {new_label}")
+                    logger.info(f"Connected to {self.connection_name}")
                 else:
                     self.app.notify(f"❌ Failed to connect to {self.connection_name}", severity="error")
-                    new_label = f"🔴 {self.connection_name}"
-                    self.update_label(new_label)
-                    logger.info(f"Updated tab label to: {new_label}")
+                    logger.error(f"Failed to connect to {self.connection_name}")
             elif conn and conn.status == ConnectionStatus.CONNECTED:
-                # Already connected, update label
-                new_label = f"🟢 {self.connection_name}"
-                self.update_label(new_label)
-                logger.info(f"Tab already connected, updated label to: {new_label}")
+                # Already connected
+                logger.info(f"Tab {self.connection_name} already connected")
             
             # Switch to this database and refresh tree
             self.connection_manager.switch_database(self.connection_name)
@@ -679,11 +655,12 @@ class PgAdminTUI(App):
         Binding("s", "sort_column", "Sort", show=False),
     ]
     
-    def __init__(self, **kwargs):
+    def __init__(self, config_path=None, **kwargs):
         super().__init__(**kwargs)
         self.connection_manager = ConnectionManager()
         self.tabbed_content = None
         self.database_configs = []
+        self.config_path = config_path  # Store the config path for use in on_mount
         
     def compose(self) -> ComposeResult:
         """Compose the main application layout."""
@@ -694,22 +671,31 @@ class PgAdminTUI(App):
         
         yield Footer()
     
-    def load_databases_from_yaml(self, config_path: str = "databases.yaml") -> List[Dict[str, Any]]:
+    def load_databases_from_yaml(self, config_path: str = None) -> List[Dict[str, Any]]:
         """Load database configurations from YAML file."""
-        config_file = Path(config_path)
-        
-        # Try multiple locations
-        if not config_file.exists():
-            # Try in current directory
-            config_file = Path.cwd() / config_path
-        
-        if not config_file.exists():
-            # Try in home directory
-            config_file = Path.home() / '.pgadmintui' / config_path
-        
-        if not config_file.exists():
-            logger.info(f"No databases.yaml found in any of the standard locations")
-            return []
+        # Use provided config path or default to databases.yaml
+        if config_path:
+            config_file = Path(config_path)
+            if not config_file.exists():
+                logger.error(f"Config file not found: {config_path}")
+                self.notify(f"Config file not found: {config_path}", severity="error")
+                return []
+        else:
+            # Default search for databases.yaml
+            config_file = Path("databases.yaml")
+            
+            # Try multiple locations
+            if not config_file.exists():
+                # Try in current directory
+                config_file = Path.cwd() / "databases.yaml"
+            
+            if not config_file.exists():
+                # Try in home directory
+                config_file = Path.home() / '.pgadmintui' / "databases.yaml"
+            
+            if not config_file.exists():
+                logger.info(f"No databases.yaml found in any of the standard locations")
+                return []
         
         try:
             logger.info(f"Loading database configurations from {config_file}")
@@ -736,12 +722,13 @@ class PgAdminTUI(App):
         # Show where logs are being written
         self.notify(f"Logs: {log_file}", severity="information", timeout=3)
         
-        # Try to load databases from YAML first
-        self.database_configs = self.load_databases_from_yaml()
+        # Try to load databases from YAML first (use custom path if provided)
+        self.database_configs = self.load_databases_from_yaml(self.config_path)
         
         if self.database_configs:
             # Load databases from YAML
-            self.notify(f"Loading {len(self.database_configs)} databases from databases.yaml...")
+            config_file_name = Path(self.config_path).name if self.config_path else "databases.yaml"
+            self.notify(f"Loading {len(self.database_configs)} databases from {config_file_name}...")
             
             # Add all databases to connection manager
             for db_config in self.database_configs:
@@ -764,7 +751,7 @@ class PgAdminTUI(App):
                 try:
                     db_name = db_config['name']
                     tab = DatabaseTab(
-                        f"⚪ {db_name}", 
+                        db_name, 
                         db_name,
                         connection_manager=self.connection_manager
                     )
@@ -821,7 +808,7 @@ class PgAdminTUI(App):
             
             # Create tab
             tab = DatabaseTab(
-                f"📊 {db_config['database']}", 
+                db_config['database'], 
                 'default',
                 connection_manager=self.connection_manager
             )
@@ -989,18 +976,14 @@ Table Sorting:
                 result = await self.connection_manager.connect_database(active_pane.connection_name)
                 if result:
                     self.notify(f"✅ Connected to {active_pane.connection_name}", severity="success")
-                    # Update tab label to show connected status
-                    active_pane.update_label(f"🟢 {active_pane.connection_name}")
-                    logger.info(f"Tab activated, updated label to: 🟢 {active_pane.connection_name}")
+                    logger.info(f"Tab activated, connected to {active_pane.connection_name}")
                 else:
                     self.notify(f"❌ Failed to connect to {active_pane.connection_name}", severity="error")
-                    active_pane.update_label(f"🔴 {active_pane.connection_name}")
-                    logger.info(f"Tab activated, connection failed, updated label to: 🔴 {active_pane.connection_name}")
+                    logger.error(f"Tab activated, connection failed for {active_pane.connection_name}")
                     return
             elif conn and conn.status == ConnectionStatus.CONNECTED:
-                # Already connected, ensure label shows correct status
-                active_pane.update_label(f"🟢 {active_pane.connection_name}")
-                logger.info(f"Tab activated, already connected, label: 🟢 {active_pane.connection_name}")
+                # Already connected
+                logger.info(f"Tab activated, already connected: {active_pane.connection_name}")
             
             # Switch active connection
             self.connection_manager.switch_database(active_pane.connection_name)
@@ -1017,7 +1000,8 @@ Table Sorting:
 
 @click.command()
 @click.option('--debug', is_flag=True, help='Enable debug logging to console')
-def main(debug):
+@click.option('--config', '-c', type=click.Path(exists=True), help='Path to database configuration YAML file')
+def main(debug, config):
     """pgAdminTUI - Terminal UI for PostgreSQL database exploration."""
     
     # If debug mode, add console handler
@@ -1036,7 +1020,7 @@ def main(debug):
         sys.stderr = open(os.devnull, 'w')
     
     try:
-        app = PgAdminTUI()
+        app = PgAdminTUI(config_path=config)
         app.run()
     finally:
         if not debug:
