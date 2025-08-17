@@ -1,6 +1,12 @@
 # pgAdminTUI
 
+[![CI](https://github.com/StakeSquid/pgAdminTUI/actions/workflows/ci.yml/badge.svg)](https://github.com/StakeSquid/pgAdminTUI/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
+
 A powerful Terminal User Interface (TUI) application for exploring and managing PostgreSQL databases without writing SQL queries.
+
+![pgAdminTUI Demo](https://github.com/StakeSquid/pgAdminTUI/assets/placeholder.png)
 
 ## Features
 
@@ -24,7 +30,7 @@ A powerful Terminal User Interface (TUI) application for exploring and managing 
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/pgAdminTUI.git
+git clone https://github.com/StakeSquid/pgAdminTUI.git
 cd pgAdminTUI
 
 # Create virtual environment

@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.9', '3.10', '3.11']
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-cov
+    
+    - name: Run linting
+      run: |
+        pip install flake8 black mypy
+        # flake8 src/ --count --select=E9,F63,F7,F82 --show-source --statistics
+        # black --check src/
+        # mypy src/ || true
+    
+    - name: Run tests
+      run: |
+        # pytest tests/ --cov=src --cov-report=xml || true
+        echo "Tests will be added in future PRs"
