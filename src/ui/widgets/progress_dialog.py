@@ -23,6 +23,8 @@ class ProgressDialog(ModalScreen):
         border: thick $background 80%;
         background: $surface;
         padding: 1 2;
+        overflow-x: auto;
+        overflow-y: auto;
     }
     
     ProgressDialog .title {

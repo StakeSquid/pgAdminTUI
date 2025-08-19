@@ -27,6 +27,8 @@ class SimpleFilterDialog(Container):
         max-height: 30;
         align: center middle;
         display: none;
+        overflow-x: auto;
+        overflow-y: auto;
     }
     
     SimpleFilterDialog.visible {

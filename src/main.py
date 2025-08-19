@@ -94,24 +94,27 @@ class DatabaseTab(TabPane):
                 # Left panel - Explorer
                 with Vertical(id="explorer-panel", classes="panel"):
                     yield Static("Database Explorer", classes="panel-title")
-                    self.tree_widget = Tree("Loading...")
-                    self.tree_widget.show_root = False
-                    yield self.tree_widget
+                    with Container(id="tree-container"):
+                        self.tree_widget = Tree("Loading...")
+                        self.tree_widget.show_root = False
+                        yield self.tree_widget
                 
                 # Right panel - Query and Results
                 with Vertical(id="main-panel", classes="panel"):
                     # Query input area
                     with Container(id="query-container"):
                         yield Static("Query Input (Ctrl+Enter to execute):", classes="panel-title")
-                        self.query_input = TextArea(language="sql")
-                        self.query_input.text = "-- Enter SQL query here\nSELECT * FROM pg_tables LIMIT 10;"
-                        yield self.query_input
+                        with Container(id="textarea-container"):
+                            self.query_input = TextArea(language="sql")
+                            self.query_input.text = "-- Enter SQL query here\nSELECT * FROM pg_tables LIMIT 10;"
+                            yield self.query_input
                     
                     # Results area
                     with Container(id="results-container"):
                         yield Static("Results:", classes="panel-title")
-                        self.data_table = DataTable()
-                        yield self.data_table
+                        with Container(id="datatable-container"):
+                            self.data_table = DataTable()
+                            yield self.data_table
             
             # Filter dialog (hidden by default)
             self.filter_dialog = SimpleFilterDialog()
@@ -937,15 +940,26 @@ class PgAdminTUI(App):
     
     Tree {
         height: 100%;
-        padding: 1;
+        overflow-x: auto;
+        overflow-y: auto;
+        scrollbar-size: 1 1;
+        scrollbar-gutter: stable;
     }
     
     TextArea {
         height: 100%;
+        overflow-x: auto;
+        overflow-y: auto;
+        scrollbar-gutter: stable;
+        scrollbar-size: 1 1;
     }
     
     DataTable {
         height: 100%;
+        overflow-x: auto;
+        overflow-y: auto;
+        scrollbar-gutter: stable;
+        scrollbar-size: 1 1;
     }
     """
     

@@ -46,6 +46,12 @@ class FilterDialog(ModalScreen):
         padding: 1;
     }
     
+    ScrollableContainer {
+        overflow-x: auto;
+        overflow-y: auto;
+        scrollbar-gutter: stable;
+    }
+    
     #filter-title {
         text-style: bold;
         margin-bottom: 1;
