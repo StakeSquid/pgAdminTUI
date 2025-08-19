@@ -80,6 +80,14 @@ class ResultTable(Widget):
                     display_value = "✓" if value else "✗"
                 elif isinstance(value, datetime):
                     display_value = value.strftime("%Y-%m-%d %H:%M:%S")
+                elif isinstance(value, bytes):
+                    # Format bytea columns - show full hex string with 0x prefix
+                    if len(value) == 0:
+                        display_value = "[dim]0x (empty)[/dim]"
+                    else:
+                        hex_str = value.hex()
+                        # Display full hex string with 0x prefix, no truncation
+                        display_value = f"0x{hex_str}"
                 else:
                     display_value = str(value)
                 row_values.append(display_value)

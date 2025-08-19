@@ -84,8 +84,12 @@ class ExportManager:
             # JSON/JSONB columns
             return json.dumps(value, ensure_ascii=False)
         elif isinstance(value, bytes):
-            # Binary data - convert to hex
-            return value.hex()
+            # Binary data - format as hex string with 0x prefix
+            if len(value) == 0:
+                return "0x"  # Empty bytea
+            else:
+                # Use 0x prefix for better readability
+                return f"0x{value.hex()}"
         else:
             return str(value)
     
@@ -205,7 +209,11 @@ class ExportManager:
                 elif isinstance(obj, Decimal):
                     return float(obj)
                 elif isinstance(obj, bytes):
-                    return obj.hex()
+                    # For JSON, use hex string with 0x prefix for consistency
+                    if len(obj) == 0:
+                        return "0x"
+                    else:
+                        return f"0x{obj.hex()}"
                 elif obj is None:
                     return None
                 return str(obj)
@@ -282,6 +290,13 @@ class ExportManager:
                             values.append(str(value))
                         elif isinstance(value, (datetime, date)):
                             values.append(f"'{value.isoformat()}'")
+                        elif isinstance(value, bytes):
+                            # Bytea data - use PostgreSQL hex format with \x for SQL compatibility
+                            # Note: SQL INSERT statements require \x prefix for bytea literals
+                            if len(value) == 0:
+                                values.append("'\\x'::bytea")
+                            else:
+                                values.append(f"'\\x{value.hex()}'::bytea")
                         elif isinstance(value, (dict, list)):
                             # JSON/JSONB
                             json_str = json.dumps(value).replace("'", "''")

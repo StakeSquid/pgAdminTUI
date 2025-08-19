@@ -65,6 +65,7 @@ class DataType(Enum):
     JSON = "json"
     JSONB = "jsonb"
     ARRAY = "array"
+    BYTEA = "bytea"
     OTHER = "other"
 
 
@@ -360,7 +361,9 @@ class FilterManager:
                     udt_name = row['udt_name'].lower() if row.get('udt_name') else ""
                     
                     # Map PostgreSQL types to our DataType enum
-                    if 'int' in data_type:
+                    if data_type == 'bytea':
+                        types[col_name] = DataType.BYTEA
+                    elif 'int' in data_type:
                         if 'big' in data_type:
                             types[col_name] = DataType.BIGINT
                         elif 'small' in data_type:
@@ -450,6 +453,15 @@ class FilterManager:
         
         elif data_type == DataType.BOOLEAN:
             return [FilterOperator.EQUALS, FilterOperator.IS_NULL, FilterOperator.IS_NOT_NULL]
+        
+        elif data_type == DataType.BYTEA:
+            # Bytea columns - limited operators since they contain binary data
+            return common + [
+                FilterOperator.EQUALS,
+                FilterOperator.NOT_EQUALS,
+                FilterOperator.IN,
+                FilterOperator.NOT_IN
+            ]
         
         else:
             # Default operators for unknown types

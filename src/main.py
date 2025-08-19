@@ -1317,6 +1317,14 @@ class PgAdminTUI(App):
                             val = row[col]
                             if val is None:
                                 display_row.append("[dim]NULL[/dim]")
+                            elif isinstance(val, bytes):
+                                # Format bytea columns - show full hex string with 0x prefix
+                                if len(val) == 0:
+                                    display_row.append("0x (empty)")
+                                else:
+                                    hex_str = val.hex()
+                                    # Display full hex string with 0x prefix, no truncation
+                                    display_row.append(f"0x{hex_str}")
                             else:
                                 display_row.append(str(val)[:100])
                         active_pane.data_table.add_row(*display_row)
