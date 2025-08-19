@@ -17,6 +17,7 @@ import click
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, Container
+from src.ui.widgets.resizable_containers import ResizableHorizontal, ResizableVertical
 from textual.widgets import Header, Footer, TabbedContent, TabPane, Static, Label, Tree, DataTable, TextArea
 from textual.message import Message
 
@@ -24,6 +25,7 @@ from textual.message import Message
 from src.core.connection_manager import ConnectionManager, DatabaseConfig, ConnectionStatus
 from src.core.query_executor import QueryExecutor, SecurityGuard
 from src.core.filter_manager import FilterManager, FilterState, ColumnFilter, FilterOperator, DataType
+from src.core.ui_settings import UISettings
 from src.ui.widgets.simple_filter_dialog import SimpleFilterDialog
 
 # Configure logging to file only (not to console)
@@ -62,10 +64,11 @@ class TableSelected(Message):
 class DatabaseTab(TabPane):
     """A tab representing a database connection."""
     
-    def __init__(self, title: str, connection_name: str, connection_manager=None, **kwargs):
+    def __init__(self, title: str, connection_name: str, connection_manager=None, ui_settings=None, **kwargs):
         super().__init__(title, **kwargs)
         self.connection_name = connection_name
         self.connection_manager = connection_manager
+        self.ui_settings = ui_settings
         self.tree_widget = None
         self.query_input = None
         self.data_table = None
@@ -90,31 +93,45 @@ class DatabaseTab(TabPane):
     def compose(self) -> ComposeResult:
         """Compose the database tab layout."""
         with Container():
-            with Horizontal():
+            # Get saved pane sizes or use defaults
+            pane_sizes = self.ui_settings.get_pane_sizes() if self.ui_settings else {}
+            explorer_width = pane_sizes.get('explorer_width', 35)
+            query_height = pane_sizes.get('query_height', 40)
+            
+            # Create horizontally resizable container
+            with ResizableHorizontal(initial_left_width=explorer_width):
                 # Left panel - Explorer
-                with Vertical(id="explorer-panel", classes="panel"):
+                with Vertical(id="explorer-panel", classes="panel left-pane"):
                     yield Static("Database Explorer", classes="panel-title")
                     with Container(id="tree-container"):
                         self.tree_widget = Tree("Loading...")
                         self.tree_widget.show_root = False
                         yield self.tree_widget
                 
+                # Horizontal splitter
+                yield Static(classes="h-splitter")
+                
                 # Right panel - Query and Results
-                with Vertical(id="main-panel", classes="panel"):
-                    # Query input area
-                    with Container(id="query-container"):
-                        yield Static("Query Input (Ctrl+Enter to execute):", classes="panel-title")
-                        with Container(id="textarea-container"):
-                            self.query_input = TextArea(language="sql")
-                            self.query_input.text = "-- Enter SQL query here\nSELECT * FROM pg_tables LIMIT 10;"
-                            yield self.query_input
-                    
-                    # Results area
-                    with Container(id="results-container"):
-                        yield Static("Results:", classes="panel-title")
-                        with Container(id="datatable-container"):
-                            self.data_table = DataTable()
-                            yield self.data_table
+                with Vertical(id="main-panel", classes="panel right-pane"):
+                    # Create vertically resizable container for query/results
+                    with ResizableVertical(initial_top_height=query_height):
+                        # Query input area
+                        with Container(id="query-container", classes="top-pane"):
+                            yield Static("Query Input (Ctrl+Enter to execute):", classes="panel-title")
+                            with Container(id="textarea-container"):
+                                self.query_input = TextArea(language="sql")
+                                self.query_input.text = "-- Enter SQL query here\nSELECT * FROM pg_tables LIMIT 10;"
+                                yield self.query_input
+                        
+                        # Vertical splitter
+                        yield Static(classes="v-splitter")
+                        
+                        # Results area
+                        with Container(id="results-container", classes="bottom-pane"):
+                            yield Static("Results:", classes="panel-title")
+                            with Container(id="datatable-container"):
+                                self.data_table = DataTable()
+                                yield self.data_table
             
             # Filter dialog (hidden by default)
             self.filter_dialog = SimpleFilterDialog()
@@ -908,6 +925,7 @@ class PgAdminTUI(App):
         border: solid $primary;
         margin: 0 1;
         padding: 1;
+        height: 100%;
     }
     
     .panel-title {
@@ -919,23 +937,46 @@ class PgAdminTUI(App):
     }
     
     #explorer-panel {
-        width: 35%;
-        min-width: 30;
+        /* Width now controlled by ResizableHorizontal */
+        height: 100%;
     }
     
     #main-panel {
-        width: 65%;
+        /* Width now controlled by ResizableHorizontal */
+        height: 100%;
     }
     
     #query-container {
-        height: 40%;
-        min-height: 8;
+        /* Height now controlled by ResizableVertical */
         border-bottom: solid $primary;
         margin-bottom: 1;
+        padding: 0;
     }
     
     #results-container {
-        height: 60%;
+        /* Height now controlled by ResizableVertical */
+        padding: 0;
+    }
+    
+    /* Splitter styling */
+    .h-splitter {
+        width: 1;
+        background: $primary;
+        height: 100%;
+    }
+    
+    .h-splitter:hover {
+        background: $warning;
+    }
+    
+    .v-splitter {
+        height: 1;
+        background: $primary;
+        width: 100%;
+    }
+    
+    .v-splitter:hover {
+        background: $warning;
     }
     
     
@@ -972,6 +1013,7 @@ class PgAdminTUI(App):
     def __init__(self, config_path=None, **kwargs):
         super().__init__(**kwargs)
         self.connection_manager = ConnectionManager()
+        self.ui_settings = UISettings()
         self.tabbed_content = None
         self.database_configs = []
         self.config_path = config_path  # Store the config path for use in on_mount
@@ -1067,7 +1109,8 @@ class PgAdminTUI(App):
                     tab = DatabaseTab(
                         db_name, 
                         db_name,
-                        connection_manager=self.connection_manager
+                        connection_manager=self.connection_manager,
+                        ui_settings=self.ui_settings
                     )
                     self.tabbed_content.add_pane(tab)
                     logger.info(f"Created tab for database: {db_name}")
@@ -1124,7 +1167,8 @@ class PgAdminTUI(App):
             tab = DatabaseTab(
                 db_config['database'], 
                 'default',
-                connection_manager=self.connection_manager
+                connection_manager=self.connection_manager,
+                ui_settings=self.ui_settings
             )
             self.tabbed_content.add_pane(tab)
             
