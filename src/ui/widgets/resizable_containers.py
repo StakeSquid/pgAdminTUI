@@ -40,6 +40,8 @@ class ResizeSplitter(Static):
         max-height: 1;
         width: 100%;
         background: $primary;
+        margin-top: 0;
+        margin-bottom: 1;
     }
     
     ResizeSplitter.vertical:hover {

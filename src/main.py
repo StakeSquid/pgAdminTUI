@@ -129,9 +129,9 @@ class DatabaseTab(TabPane):
                         # Results area
                         with Container(id="results-container", classes="bottom-pane"):
                             yield Static("Results:", classes="panel-title")
-                            with Container(id="datatable-container"):
-                                self.data_table = DataTable()
-                                yield self.data_table
+                            self.data_table = DataTable(show_cursor=True, cursor_type="row", zebra_stripes=True)
+                            self.data_table.styles.height = "1fr"
+                            yield self.data_table
             
             # Filter dialog (hidden by default)
             self.filter_dialog = SimpleFilterDialog()
@@ -948,14 +948,21 @@ class PgAdminTUI(App):
     
     #query-container {
         /* Height now controlled by ResizableVertical */
-        border-bottom: solid $primary;
-        margin-bottom: 1;
         padding: 0;
     }
     
     #results-container {
         /* Height now controlled by ResizableVertical */
         padding: 0;
+        padding-top: 1;  /* Add space between splitter and Results title */
+    }
+    
+    #textarea-container {
+        height: 1fr;  /* Take remaining space */
+    }
+    
+    #tree-container {
+        height: 1fr;  /* Take remaining space */
     }
     
     /* Splitter styling */
@@ -981,12 +988,29 @@ class PgAdminTUI(App):
     
     
     /* Common scrollbar styling for all scrollable widgets */
-    Tree, TextArea, DataTable {
+    Tree, TextArea {
         height: 100%;
         overflow-x: auto;
         overflow-y: auto;
         scrollbar-size: 2 1;  /* Vertical: 2, Horizontal: 1 - workaround for cutoff */
         scrollbar-size-vertical: 2;
+        scrollbar-size-horizontal: 1;
+        scrollbar-gutter: stable;
+        scrollbar-background: $primary-darken-2;
+        scrollbar-background-hover: $primary-darken-1;
+        scrollbar-color: $primary;
+        scrollbar-color-hover: $primary-lighten-1;
+        scrollbar-color-active: $primary-lighten-2;
+        scrollbar-corner-color: $surface;
+    }
+    
+    DataTable {
+        height: 1fr;
+        width: 100%;
+        overflow-x: scroll !important;
+        overflow-y: scroll !important;
+        scrollbar-size: 1 1;  /* Vertical: 1, Horizontal: 1 */
+        scrollbar-size-vertical: 1;
         scrollbar-size-horizontal: 1;
         scrollbar-gutter: stable;
         scrollbar-background: $primary-darken-2;
