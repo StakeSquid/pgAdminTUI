@@ -954,7 +954,8 @@ class PgAdminTUI(App):
     #results-container {
         /* Height now controlled by ResizableVertical */
         padding: 0;
-        padding-top: 1;  /* Add space between splitter and Results title */
+        padding-top: 1;   /* Space between splitter and Results title */
+        padding-bottom: 1;  /* Reserve space so horizontal scrollbar isn't clipped */
     }
     
     #textarea-container {
@@ -1007,11 +1008,13 @@ class PgAdminTUI(App):
     DataTable {
         height: 1fr;
         width: 100%;
-        overflow-x: scroll !important;
-        overflow-y: scroll !important;
-        scrollbar-size: 1 1;  /* Vertical: 1, Horizontal: 1 */
+        /* Use auto to show bars only when needed and avoid layout conflicts */
+        overflow-x: auto;
+        overflow-y: auto;
+        /* Give the horizontal bar an extra row to avoid terminal rounding/clipping */
+        scrollbar-size: 1 2;  /* Vertical: 1, Horizontal: 2 */
         scrollbar-size-vertical: 1;
-        scrollbar-size-horizontal: 1;
+        scrollbar-size-horizontal: 2;
         scrollbar-gutter: stable;
         scrollbar-background: $primary-darken-2;
         scrollbar-background-hover: $primary-darken-1;
