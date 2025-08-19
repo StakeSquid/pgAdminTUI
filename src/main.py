@@ -938,28 +938,22 @@ class PgAdminTUI(App):
         height: 60%;
     }
     
-    Tree {
-        height: 100%;
-        overflow-x: auto;
-        overflow-y: auto;
-        scrollbar-size: 1 1;
-        scrollbar-gutter: stable;
-    }
     
-    TextArea {
+    /* Common scrollbar styling for all scrollable widgets */
+    Tree, TextArea, DataTable {
         height: 100%;
         overflow-x: auto;
         overflow-y: auto;
+        scrollbar-size: 2 1;  /* Vertical: 2, Horizontal: 1 - workaround for cutoff */
+        scrollbar-size-vertical: 2;
+        scrollbar-size-horizontal: 1;
         scrollbar-gutter: stable;
-        scrollbar-size: 1 1;
-    }
-    
-    DataTable {
-        height: 100%;
-        overflow-x: auto;
-        overflow-y: auto;
-        scrollbar-gutter: stable;
-        scrollbar-size: 1 1;
+        scrollbar-background: $primary-darken-2;
+        scrollbar-background-hover: $primary-darken-1;
+        scrollbar-color: $primary;
+        scrollbar-color-hover: $primary-lighten-1;
+        scrollbar-color-active: $primary-lighten-2;
+        scrollbar-corner-color: $surface;
     }
     """
     
