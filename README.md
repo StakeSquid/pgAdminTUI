@@ -6,7 +6,11 @@
 
 A powerful Terminal User Interface (TUI) application for exploring and managing PostgreSQL databases without writing SQL queries.
 
-![pgAdminTUI Demo](https://github.com/StakeSquid/pgAdminTUI/assets/placeholder.png)
+<img width="2672" height="1552" alt="Screenshot 2025-08-19 at 8 29 53 PM" src="https://github.com/user-attachments/assets/ddf20bad-6b31-40b8-afac-f858c7120007" />
+<img width="2672" height="1552" alt="Screenshot 2025-08-19 at 8 32 57 PM" src="https://github.com/user-attachments/assets/7061fea5-9162-4a10-a208-5fb35bd553ab" />
+<img width="2672" height="1552" alt="Screenshot 2025-08-19 at 8 30 57 PM" src="https://github.com/user-attachments/assets/d1ef9a5a-bcce-4e8e-9c9e-b6eae7f7c844" />
+<img width="1762" height="792" alt="Screenshot 2025-08-19 at 8 31 24 PM" src="https://github.com/user-attachments/assets/25995f2c-0a21-4dce-8567-5c55109bce89" />
+
 
 ## Features
 
